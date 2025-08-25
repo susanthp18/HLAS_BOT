@@ -1,0 +1,11 @@
+langchain
+langchain-openai
+fastapi
+uvicorn
+python-dotenv
+weaviate-client
+requests
+beautifulsoup4
+llama-parse
+langchain-community
+google-generativeai
