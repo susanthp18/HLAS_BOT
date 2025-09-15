@@ -25,6 +25,11 @@ try:
     # The ismaster command is cheap and does not require auth.
     client.admin.command('ismaster')
     logger.info("Successfully connected to MongoDB.")
+    
+    # Ensure a unique index on session_id to prevent duplicate sessions and ensure atomic upserts.
+    conversations_collection.create_index("session_id", unique=True)
+    logger.info("Ensured unique index on 'session_id' in conversations collection.")
+
 except Exception as e:
     logger.critical(f"Failed to connect to MongoDB: {e}")
     client = None
