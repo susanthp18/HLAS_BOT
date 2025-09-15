@@ -36,7 +36,8 @@ def run_maid_agent(user_message: str, chat_history: list, session_id: str):
     Handles the conversation for maid insurance inquiries using an LLM.
     """
     session = get_session(session_id)
-    collected_info = session.get("collected_info", {})
+    # Get only the maid-specific info, not the whole collected_info object
+    maid_info = session.get("collected_info", {}).get("maid_info", {})
     
     # Information to be collected
     required_info = ["contract_duration", "personal_accident_coverage"]
@@ -67,18 +68,18 @@ Ask for the next piece of information in a conversational way. If the user provi
     # Update the collected information
     for key, value in response.model_dump().items():
         if key != "response" and value:
-            collected_info[key] = value
+            maid_info[key] = value
     
     # Store collected info in session using the proper method
-    set_collected_info(session_id, "maid_info", collected_info)
+    set_collected_info(session_id, "maid_info", maid_info)
     
     # Debug logging
-    logger.info(f"Maid info collected for {session_id}: {collected_info}")
+    logger.info(f"Maid info collected for {session_id}: {maid_info}")
     logger.info(f"Required info: {required_info}")
-    logger.info(f"All collected: {all(key in collected_info for key in required_info)}")
+    logger.info(f"All collected: {all(key in maid_info for key in required_info)}")
     
     # Check if all information has been collected NOW (after processing current message)
-    if all(key in collected_info for key in required_info):
+    if all(key in maid_info for key in required_info):
         from app.session_manager import set_stage
         set_stage(session_id, "recommendation")
         logger.info(f"Moving to recommendation stage for session {session_id}")

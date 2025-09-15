@@ -38,7 +38,8 @@ def run_travel_agent(user_message: str, chat_history: list, session_id: str):
     Handles the conversation for travel insurance inquiries using an LLM.
     """
     session = get_session(session_id)
-    collected_info = session.get("collected_info", {})
+    # Get only the travel-specific info, not the whole collected_info object
+    travel_info = session.get("collected_info", {}).get("travel_info", {})
     
     # Information to be collected
     required_info = ["destination", "start_date", "end_date", "party_size"]
@@ -53,7 +54,7 @@ def run_travel_agent(user_message: str, chat_history: list, session_id: str):
 
 Today's date is {today_date}. All travel dates must be in the future.
 
-Current collected information: {collected_info}
+Current collected information: {travel_info}
 Conversation history: {chat_history}
 
 IMPORTANT EXTRACTION RULES:
@@ -73,18 +74,18 @@ Ask for the next piece of information in a conversational way. If the user provi
     # Update the collected information
     for key, value in response.model_dump().items():
         if key != "response" and value:
-            collected_info[key] = value
+            travel_info[key] = value
     
     # Store collected info in session using the proper method
-    set_collected_info(session_id, "travel_info", collected_info)
+    set_collected_info(session_id, "travel_info", travel_info)
     
     # Debug logging
-    logger.info(f"Travel info collected for {session_id}: {collected_info}")
+    logger.info(f"Travel info collected for {session_id}: {travel_info}")
     logger.info(f"Required info: {required_info}")
-    logger.info(f"All collected: {all(key in collected_info for key in required_info)}")
+    logger.info(f"All collected: {all(key in travel_info for key in required_info)}")
     
     # Check if all information has been collected NOW (after processing current message)
-    if all(key in collected_info for key in required_info):
+    if all(key in travel_info for key in required_info):
         from app.session_manager import set_stage
         set_stage(session_id, "recommendation")
         logger.info(f"Moving to recommendation stage for session {session_id}")
