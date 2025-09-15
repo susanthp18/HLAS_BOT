@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 from dotenv import load_dotenv
 from pymongo import MongoClient, errors
 
@@ -14,10 +15,11 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME = "hlas_bot"
 COLLECTION_NAME = "conversations"
 
-def initialize_mongo():
+def initialize_mongo(reset=False):
     """
     Connects to MongoDB, creates the database and collection if they don't exist,
     and sets up the necessary indexes for the conversation history.
+    Optionally drops the collection if reset is True.
     """
     print("--- MongoDB Initialization Script ---")
     
@@ -33,6 +35,20 @@ def initialize_mongo():
         # Get database and collection
         db = client[DB_NAME]
         
+        if reset:
+            print(f"\n--reset flag detected. Attempting to drop collection '{COLLECTION_NAME}'...")
+            user_confirmation = input(f"ARE YOU SURE you want to permanently delete all data in '{COLLECTION_NAME}'? Type 'yes' to confirm: ")
+            if user_confirmation.lower() == 'yes':
+                try:
+                    db.drop_collection(COLLECTION_NAME)
+                    print(f"✅ Collection '{COLLECTION_NAME}' dropped successfully.")
+                except errors.PyMongoError as e:
+                    print(f"❌ Error dropping collection: {e}")
+                    return
+            else:
+                print("⚠️ Reset cancelled by user.")
+                return
+
         # Check if collection exists, create if not
         if COLLECTION_NAME not in db.list_collection_names():
             print(f"Collection '{COLLECTION_NAME}' does not exist. Creating it now...")
@@ -79,4 +95,8 @@ def initialize_mongo():
             print("\nMongoDB connection closed.")
 
 if __name__ == "__main__":
-    initialize_mongo()
+    parser = argparse.ArgumentParser(description="Initialize or reset the MongoDB 'conversations' collection.")
+    parser.add_argument("--reset", action="store_true", help="Drop the existing 'conversations' collection to clear all data before re-initializing.")
+    args = parser.parse_args()
+    
+    initialize_mongo(reset=args.reset)
