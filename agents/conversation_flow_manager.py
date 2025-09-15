@@ -100,19 +100,8 @@ RESPONSE FORMAT (JSON):
             
         except Exception as e:
             logger.error(f"Error in conversation flow analysis: {str(e)}")
-            # Safe fallback - continue with current conversation if there's context
-            if current_agent and current_agent != "UNKNOWN":
-                return {
-                    "decision": "continue",
-                    "confidence": 0.6,
-                    "reason": f"Error occurred, defaulting to continue with {current_agent}"
-                }
-            else:
-                return {
-                    "decision": "switch",
-                    "confidence": 0.5,
-                    "reason": "Error occurred, defaulting to classify"
-                }
+            # Re-raise the exception to be handled by the caller
+            raise
     
     def _extract_last_agent_message(self, chat_history: List) -> str:
         """Extract the last message from the agent."""
@@ -177,69 +166,34 @@ RESPONSE FORMAT (JSON):
             decision_data = json.loads(llm_response)
             
             # Validate the parsed data
-            if "decision" not in decision_data or "confidence" not in decision_data:
+            if "decision" not in decision_data or "confidence" not in decision_data or "reason" not in decision_data:
                 raise ValueError("Missing required fields in LLM response.")
                 
             return decision_data
             
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning(f"Error parsing LLM decision: {str(e)}")
-            # Fallback to a safe default
-            return {
-                "decision": "continue",
-                "confidence": 0.5,
-                "reason": "Parse error - defaulting to continue"
-            }
+            # Re-raise the exception to indicate a parsing failure
+            raise
     
-    def should_continue_conversation(
-        self, 
-        session_id: str, 
-        user_message: str, 
-        chat_history: List
-    ) -> bool:
-        """
-        Main method to determine if conversation should continue with current agent.
-        Returns True if should continue, False if should reclassify.
-        """
-        try:
-            analysis = self.analyze_conversation_flow(session_id, user_message, chat_history)
-            
-            decision = analysis["decision"]
-            confidence = analysis["confidence"]
-            
-            # High confidence decisions
-            if confidence >= 0.8:
-                return decision == "continue"
-            
-            # Medium confidence - prefer continuation unless explicitly switching
-            elif confidence >= 0.5:
-                return decision in ["continue", "clarify"]
-            
-            # Low confidence - be conservative and continue if there's existing context
-            else:
-                session = get_session(session_id)
-                current_agent = session.get("conversation_context", {}).get("primary_product")
-                return bool(current_agent and current_agent != "UNKNOWN")
-                
-        except Exception as e:
-            logger.error(f"Error in should_continue_conversation: {str(e)}")
-            # Safe fallback - continue if there's existing context
+    def _get_decision_from_analysis(self, analysis: Dict[str, Any], session_id: str) -> bool:
+        """Helper to determine continuation from analysis result."""
+        decision = analysis["decision"]
+        confidence = analysis["confidence"]
+        
+        # High confidence decisions
+        if confidence >= 0.8:
+            return decision == "continue"
+        
+        # Medium confidence - prefer continuation unless explicitly switching
+        elif confidence >= 0.5:
+            return decision in ["continue", "clarify"]
+        
+        # Low confidence - be conservative and continue if there's existing context
+        else:
             session = get_session(session_id)
-            current_agent = session.get("conversation_context", {}).get("primary_product")
+            current_agent = session["conversation_context"]["primary_product"]
             return bool(current_agent and current_agent != "UNKNOWN")
-    
-    def get_continuation_reason(
-        self, 
-        session_id: str, 
-        user_message: str, 
-        chat_history: List
-    ) -> str:
-        """Get explanation for why conversation should continue or switch."""
-        try:
-            analysis = self.analyze_conversation_flow(session_id, user_message, chat_history)
-            return analysis.get("reason", "Conversation flow analysis")
-        except Exception as e:
-            return f"Analysis error: {str(e)}"
 
 # Global instance
 conversation_flow_manager = ConversationFlowManager()
@@ -252,30 +206,24 @@ def should_continue_with_current_agent(session_id: str, user_message: str, chat_
         Dict with 'should_continue', 'confidence', and 'reason'
     """
     try:
-        should_continue = conversation_flow_manager.should_continue_conversation(
-            session_id, user_message, chat_history
-        )
-        
-        reason = conversation_flow_manager.get_continuation_reason(
-            session_id, user_message, chat_history
-        )
-        
+        # Single call to the LLM to get the analysis
         analysis = conversation_flow_manager.analyze_conversation_flow(
             session_id, user_message, chat_history
         )
         
+        # Reuse the analysis result to make a decision
+        should_continue = conversation_flow_manager._get_decision_from_analysis(
+            analysis, session_id
+        )
+        
         return {
             "should_continue": should_continue,
-            "confidence": analysis.get("confidence", 0.7),
-            "reason": reason,
-            "decision": analysis.get("decision", "continue")
+            "confidence": analysis["confidence"],
+            "reason": analysis["reason"],
+            "decision": analysis["decision"]
         }
         
     except Exception as e:
         logger.error(f"Error in conversation routing analysis: {str(e)}")
-        return {
-            "should_continue": True,  # Conservative fallback
-            "confidence": 0.5,
-            "reason": f"Error occurred: {str(e)}",
-            "decision": "continue"
-        }
+        # Re-raise the exception to be handled by the orchestrator
+        raise

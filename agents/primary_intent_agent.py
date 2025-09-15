@@ -55,17 +55,6 @@ def validate_user_input(user_message: str) -> dict:
             "message": "I didn't quite understand that. Could you please rephrase your question about insurance? 😅"
         }
     
-    # Check for only numbers or special characters, but allow reasonable single numbers
-    stripped_message = user_message.strip()
-    if re.match(r'^[0-9\s\-\+\(\)\.]+$', stripped_message):
-        # Allow single digit numbers (party size) and reasonable numbers
-        if not (len(stripped_message) <= 2 and stripped_message.isdigit()):
-            return {
-                "is_valid": False,
-                "issue_type": "only_numbers",
-                "message": "I see you've shared some numbers. Could you please let me know what insurance information you're looking for? 📱"
-            }
-    
     # Check for only special characters
     if re.match(r'^[^\w\s]+$', user_message.strip()):
         return {

@@ -1,11 +1,8 @@
-langchain
 langchain-openai
-fastapi
+langchain-text-splitters
 uvicorn
+fastapi
 python-dotenv
+tiktoken
 weaviate-client
-requests
-beautifulsoup4
-llama-parse
-langchain-community
-google-generativeai
+pymongo[srv]

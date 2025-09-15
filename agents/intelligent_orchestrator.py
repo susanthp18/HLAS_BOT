@@ -30,6 +30,7 @@ def handle_unknown_product_intelligently(user_message: str, chat_history: list, 
             if intent_result.product == Product.TRAVEL:
                 logger.info(f"LLM routing to TRAVEL agent for session {session_id}")
                 update_conversation_context(session_id, primary_product=Product.TRAVEL, last_intent="product_inquiry")
+                set_stage(session_id, "travel_inquiry")
                 travel_response = run_travel_agent(user_message, chat_history, session_id)
                 if isinstance(travel_response, dict):
                     return travel_response.get("output", "I'd be happy to help with travel insurance! 🌍✈️")
@@ -39,6 +40,7 @@ def handle_unknown_product_intelligently(user_message: str, chat_history: list, 
             elif intent_result.product == Product.MAID:
                 logger.info(f"LLM routing to MAID agent for session {session_id}")
                 update_conversation_context(session_id, primary_product=Product.MAID, last_intent="product_inquiry")
+                set_stage(session_id, "maid_inquiry")
                 maid_response = run_maid_agent(user_message, chat_history, session_id)
                 if isinstance(maid_response, dict):
                     return maid_response.get("output", "I'd be happy to help with maid insurance! 🏠")
@@ -293,6 +295,8 @@ The user has just received a plan recommendation with benefits and options to:
 
 Analyze the user's message and conversation history to determine their intent.
 
+**CRITICAL**: If the user's message explicitly mentions a different insurance product (e.g., 'maid' when the current product is TRAVEL), you MUST classify the intent as 'other' to trigger a re-routing.
+
 Chat History:
 {chat_history[-6:] if len(chat_history) > 6 else chat_history}"""),
                     HumanMessage(content=f"User message: {user_message}")
@@ -301,31 +305,57 @@ Chat History:
                 intent_result = intent_chain.invoke(intent_prompt)
                 logger.info(f"Recommendation stage intent: {intent_result.intent} (confidence: {intent_result.confidence})")
                 
-                # Route based on LLM-determined intent
-                if intent_result.intent == "purchase" and intent_result.confidence > 0.6:
-                    logger.info(f"User wants to proceed to purchase for session {session_id}")
-                    set_stage(session_id, "payment")
-                    agent_response = run_payment_agent(user_message, chat_history, session_id)
-                    if isinstance(agent_response, dict):
-                        agent_response = agent_response.get("output", "Let me help you with the payment process! 💳")
-                
-                elif intent_result.intent == "plan_comparison" and intent_result.confidence > 0.6:
-                    logger.info(f"User asking for plan comparison for session {session_id}")
-                    from .rag_agent import get_rag_response
-                    # Use the user's message directly as the query to get specific comparisons
-                    query = user_message
-                    # Convert product enum to string for collection lookup
-                    product_str = current_product.value if hasattr(current_product, 'value') else str(current_product)
-                    agent_response = get_rag_response(query, chat_history, product_str)
-                    agent_response += "\n\nWould you like to proceed with a different plan or continue with the current recommendation? Or do you have other questions about the coverage?"
-                
-                else:  # policy_question or other - use RAG
-                    logger.info(f"User asking question about policy/coverage for session {session_id}")
-                    from .rag_agent import get_rag_response
-                    # Convert product enum to string for collection lookup
-                    product_str = current_product.value if hasattr(current_product, 'value') else str(current_product)
-                    agent_response = get_rag_response(user_message, chat_history, product_str)
-                    agent_response += "\n\nDo you have any other questions about the coverage, or would you like to proceed with purchasing this plan?"
+                # UNIVERSAL CHECK: Always re-classify with the primary agent to catch any context switches first.
+                primary_intent_result = get_primary_intent(user_message, chat_history)
+
+                if primary_intent_result.product != Product.UNKNOWN and primary_intent_result.product != current_product:
+                    # This is a product switch. Handle it regardless of the recommendation stage intent.
+                    logger.info(f"Detected product switch during recommendation stage from {current_product} to {primary_intent_result.product}.")
+                    update_conversation_context(session_id, primary_product=primary_intent_result.product, last_intent="product_inquiry")
+                    set_stage(session_id, "initial")
+                    agent_response = process_normal_intent(primary_intent_result, user_message, chat_history, session_id)
+                else:
+                    # No product switch detected, proceed with routing based on recommendation stage intent.
+                    if intent_result.intent == "purchase" and intent_result.confidence > 0.6:
+                        logger.info(f"User wants to proceed to purchase for session {session_id}")
+                        set_stage(session_id, "payment")
+                        agent_response = run_payment_agent(user_message, chat_history, session_id)
+                        if isinstance(agent_response, dict):
+                            agent_response = agent_response.get("output", "Let me help you with the payment process! 💳")
+                    
+                    elif intent_result.intent == "plan_comparison" and intent_result.confidence > 0.6:
+                        logger.info(f"User asking for plan comparison for session {session_id}")
+                        from .rag_agent import get_rag_response
+                        # Use the user's message directly as the query to get specific comparisons
+                        query = user_message
+                        # Convert product enum to string for collection lookup
+                        product_str = current_product.value if hasattr(current_product, 'value') else str(current_product)
+                        agent_response = get_rag_response(query, chat_history, product_str)
+                        agent_response += "\n\nWould you like to proceed with a different plan or continue with the current recommendation? Or do you have other questions about the coverage?"
+                    
+                    elif intent_result.intent == "other" and intent_result.confidence > 0.6:
+                        logger.info(f"Recommendation stage intent is 'other'. Already checked for product switch. Now checking for special intents.")
+                        
+                        # Case 1: User is asking about claim status (already handled by the universal check if product was different)
+                        if primary_intent_result.intent == "policy_claim_status":
+                            logger.info(f"Detected policy/claim status check. Providing stubbed response.")
+                            agent_response = """*Policy/Claim Status Check*\n\nCurrently under development.\n\nWill require NRIC number when available.\n\nCan I help with:\n• Coverage questions\n• Benefits information\n• New insurance purchase"""
+
+                        # Case 2: Fallback to RAG if it's not a clear special intent
+                        else:
+                            logger.info(f"Re-classification did not yield a clear action. Treating as policy question for current product: {current_product}")
+                            from .rag_agent import get_rag_response
+                            product_str = current_product.value if hasattr(current_product, 'value') else str(current_product)
+                            agent_response = get_rag_response(user_message, chat_history, product_str)
+                            agent_response += "\n\nDo you have any other questions about the coverage, or would you like to proceed with purchasing this plan?"
+                    
+                    else:  # This now primarily handles 'policy_question'
+                        logger.info(f"User asking policy question about {current_product} for session {session_id}")
+                        from .rag_agent import get_rag_response
+                        # Convert product enum to string for collection lookup
+                        product_str = current_product.value if hasattr(current_product, 'value') else str(current_product)
+                        agent_response = get_rag_response(user_message, chat_history, product_str)
+                        agent_response += "\n\nDo you have any other questions about the coverage, or would you like to proceed with purchasing this plan?"
                     
             except Exception as e:
                 logger.error(f"Recommendation stage error for session {session_id}: {str(e)}")
@@ -465,8 +495,13 @@ Chat History:
                 logger.info(f"🔍 MAIN HANDLER: Processing policy/claim status check for session {session_id}")
                 agent_response = """*Policy/Claim Status Check*\n\nCurrently under development.\n\nWill require NRIC number when available.\n\nCan I help with:\n• Coverage questions\n• Benefits information\n• New insurance purchase"""
             else:
-                # Check for user confusion patterns as fallback
-                confusion_response = detect_confusion(session_id, user_message)
+                # Skip confusion detection during data collection stages for travel/maid agents,
+                # as it can misinterpret valid contextual inputs like dates or numbers.
+                is_data_collection_stage = should_continue and product in [Product.TRAVEL, Product.MAID]
+                confusion_response = None
+                if not is_data_collection_stage:
+                    confusion_response = detect_confusion(session_id, user_message)
+
                 if confusion_response:
                     logger.info(f"🤔 CONFUSION detected for session {session_id}")
                     agent_response = confusion_response
@@ -528,6 +563,7 @@ def process_normal_intent(intent_result, user_message: str, chat_history: list, 
             try:
                 agent_function = agent_map[product]
                 logger.info(f"Routing to {product.value} agent for session {session_id}")
+                set_stage(session_id, f"{product.value.lower()}_inquiry")
                 
                 # Pass session_id to agents that support it
                 if product == Product.TRAVEL:
@@ -553,50 +589,3 @@ def process_normal_intent(intent_result, user_message: str, chat_history: list, 
     except Exception as e:
         logger.error(f"Error in process_normal_intent: {str(e)}")
         return get_fallback_response("general_error", session_id)
-
-if __name__ == '__main__':
-    # Example usage of the orchestrator
-    session_id = "test_session_123"
-
-    # --- Test Case 1: Travel Inquiry ---
-    print("--- Testing Travel Inquiry ---")
-    user_msg_1 = "I need insurance for my trip to Thailand."
-    response_1 = orchestrate_chat(user_msg_1, session_id)
-    print(f"User: {user_msg_1}")
-    print(f"Bot: {response_1}")
-    print("-" * 20)
-
-    # --- Test Case 2: Maid Inquiry ---
-    print("--- Testing Maid Inquiry ---")
-    user_msg_2 = "I want to buy insurance for my helper."
-    response_2 = orchestrate_chat(user_msg_2, session_id)
-    print(f"User: {user_msg_2}")
-    print(f"Bot: {response_2}")
-    print("-" * 20)
-
-    # --- Test Case 3: Payment Inquiry ---
-    print("--- Testing Payment Inquiry ---")
-    user_msg_3 = "I'm ready to pay."
-    response_3 = orchestrate_chat(user_msg_3, session_id)
-    print(f"User: {user_msg_3}")
-    print(f"Bot: {response_3}")
-    print("-" * 20)
-
-    # --- Test Case 4: Follow-up in Payment Stage ---
-    print("--- Testing Follow-up in Payment Stage ---")
-    user_msg_4 = "My name is Test User."
-    response_4 = orchestrate_chat(user_msg_4, session_id)
-    print(f"User: {user_msg_4}")
-    print(f"Bot: {response_4}")
-    print("-" * 20)
-
-    # --- Test Case 5: Unrelated Inquiry ---
-    print("--- Testing Unrelated Inquiry ---")
-    user_msg_5 = "What's the weather today?"
-    response_5 = orchestrate_chat(user_msg_5, session_id)
-    print(f"User: {user_msg_5}")
-    print(f"Bot: {response_5}")
-    print("-" * 20)
-
-    print("\nSession State after all interactions:")
-    print(get_session(session_id))

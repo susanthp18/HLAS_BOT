@@ -112,7 +112,8 @@ INSTRUCTIONS:
 2. Determine the current `stage`, the `user_intent`, and your `confidence` level (as a number between 0.0 and 1.0).
 3. Formulate a `response` to the user based on the current stage and their intent.
 4. If the user provides their name or email, extract it into `extracted_name` or `extracted_email`.
-5. Your final output must be a JSON object containing all required fields: `stage`, `user_intent`, `confidence` (as float), and `response`.
+5. **IMPORTANT**: If the user's message is a denial (e.g., "no"), a question, or mentions a different product, do NOT extract any details. Set the intent to 'cancel' or 'question' accordingly.
+6. Your final output must be a JSON object containing all required fields: `stage`, `user_intent`, `confidence` (as float), and `response`.
 
 IMPORTANT: `confidence` must be a number between 0.0 and 1.0 (e.g., 0.95, 0.8, 0.7), NOT a word like 'high' or 'low'.
 """),
@@ -127,32 +128,6 @@ IMPORTANT: `confidence` must be a number between 0.0 and 1.0 (e.g., 0.95, 0.8, 0
                 result.confidence = 0.8
             
             logger.info(f"Payment stage analysis: {result.stage}, Intent: {result.user_intent}, Confidence: {result.confidence}")
-
-            # Fallback: If LLM fails to extract email, try regex
-            if not result.extracted_email:
-                email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_message)
-                if email_match:
-                    extracted = email_match.group(0)
-                    if validate_email(extracted):
-                        logger.info(f"Regex fallback extracted a valid email: {extracted}")
-                        result.extracted_email = extracted
-            
-            # Fallback: If LLM fails to extract name, try common patterns
-            if not result.extracted_name:
-                # Look for patterns like "my name is X", "I am X", "name: X", etc.
-                name_patterns = [
-                    r'(?:my name is|i am|name is|name:)\s+([a-zA-Z\s\'-]{2,30})',
-                    r'([A-Z][a-zA-Z\'-]+(?:\s+[A-Z][a-zA-Z\'-]+)*)',  # Capitalized names
-                ]
-                
-                for pattern in name_patterns:
-                    name_match = re.search(pattern, user_message, re.IGNORECASE)
-                    if name_match:
-                        extracted_name = name_match.group(1).strip()
-                        if validate_name(extracted_name) and len(extracted_name.split()) <= 4:  # Reasonable name length
-                            logger.info(f"Regex fallback extracted a valid name: {extracted_name}")
-                            result.extracted_name = extracted_name
-                            break
             
         except Exception as e:
             logger.error(f"Error in payment LLM analysis: {str(e)}")

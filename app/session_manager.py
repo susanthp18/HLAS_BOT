@@ -1,125 +1,192 @@
-from typing import Dict, Any, List, Optional
+import os
 import logging
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
+from pymongo import MongoClient, ReturnDocument
+from dotenv import load_dotenv
+
 from app.config import MAX_CONTEXT_MESSAGES
+
+# Load environment variables
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Enhanced session storage with metadata
-SESSIONS: Dict[str, Dict[str, Any]] = {}
+# --- MongoDB Configuration ---
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+DB_NAME = "hlas_bot"
+COLLECTION_NAME = "conversations"
 
-def get_session(session_id: str) -> Dict[str, Any]:
+# --- Global MongoDB Client ---
+try:
+    client = MongoClient(MONGO_URI)
+    db = client[DB_NAME]
+    conversations_collection = db[COLLECTION_NAME]
+    # The ismaster command is cheap and does not require auth.
+    client.admin.command('ismaster')
+    logger.info("Successfully connected to MongoDB.")
+except Exception as e:
+    logger.critical(f"Failed to connect to MongoDB: {e}")
+    client = None
+    conversations_collection = None
+
+def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     """
-    Retrieves a session or creates a new one if it doesn't exist with enhanced metadata.
+    Retrieves a session or creates a new one if it doesn't exist in MongoDB.
     """
-    if session_id not in SESSIONS:
-        now = datetime.now()
-        SESSIONS[session_id] = {
-            "chat_history": [],
-            "stage": "initial",
-            "created_at": now,
-            "last_active": now,
-            "message_count": 0,
-            "user_preferences": {},
-            "collected_info": {},
-            "conversation_context": {
-                "current_agent": None,
-                "primary_product": None,
-                "has_greeted": False,
-                "information_collected": False,
-                "last_intent": None,
-                "error_count": 0
-            }
-        }
-        logger.info(f"Created new session: {session_id}")
-    else:
-        # Update last active time
-        SESSIONS[session_id]["last_active"] = datetime.now()
+    if conversations_collection is None:
+        logger.error("MongoDB collection not available.")
+        return None
+
+    now = datetime.now()
     
-    return SESSIONS[session_id]
+    # Atomically find and update (or insert if not found)
+    session = conversations_collection.find_one_and_update(
+        {"session_id": session_id},
+        {
+            "$setOnInsert": {
+                "chat_history": [],
+                "stage": "initial",
+                "created_at": now,
+                "message_count": 0,
+                "user_preferences": {},
+                "collected_info": {},
+                "conversation_context": {
+                    "current_agent": None,
+                    "primary_product": None,
+                    "has_greeted": False,
+                    "information_collected": False,
+                    "last_intent": None,
+                    "error_count": 0
+                }
+            },
+            "$set": {
+                "last_active": now
+            }
+        },
+        upsert=True,
+        return_document=ReturnDocument.AFTER
+    )
+    
+    if session.get("message_count", 0) == 0:
+        logger.info(f"Created new session: {session_id}")
+        
+    return session
 
 def update_session(session_id: str, user_message: str, agent_response: str):
     """
-    Updates the chat history and session metadata for a given session.
+    Updates the chat history and session metadata in MongoDB.
     """
-    session = get_session(session_id)
-    chat_history = session["chat_history"]
-    
-    # Add messages to history
-    chat_history.append({"role": "user", "content": user_message, "timestamp": datetime.now()})
-    chat_history.append({"role": "assistant", "content": agent_response, "timestamp": datetime.now()})
-    
-    # Update session metadata
-    session["message_count"] += 1
-    session["last_active"] = datetime.now()
-    
-    # Trim history to keep it within the configured limit
-    if len(chat_history) > MAX_CONTEXT_MESSAGES * 2:
-        # Keep the last MAX_CONTEXT_MESSAGES pairs of messages
-        session["chat_history"] = chat_history[-(MAX_CONTEXT_MESSAGES * 2):]
-        logger.debug(f"Trimmed chat history for session {session_id}")
-    
-    logger.debug(f"Updated session {session_id}: {session['message_count']} total messages")
+    if conversations_collection is None: return
+
+    now = datetime.now()
+    history_updates = [
+        {"role": "user", "content": user_message, "timestamp": now},
+        {"role": "assistant", "content": agent_response, "timestamp": now}
+    ]
+
+    conversations_collection.update_one(
+        {"session_id": session_id},
+        {
+            "$push": {"chat_history": {"$each": history_updates}},
+            "$set": {"last_active": now},
+            "$inc": {"message_count": 1}
+        }
+    )
+    logger.debug(f"Updated session {session_id} in MongoDB.")
+
 
 def get_chat_history(session_id: str) -> List[Dict[str, str]]:
     """
-    Returns the chat history for a given session.
+    Returns the most recent chat history for a given session from MongoDB.
     """
-    session = get_session(session_id)
-    return session["chat_history"]
+    if conversations_collection is None: return []
+
+    # Use projection to get only the history, sliced to the last N pairs
+    session = conversations_collection.find_one(
+        {"session_id": session_id},
+        {"chat_history": {"$slice": -(MAX_CONTEXT_MESSAGES * 2)}}
+    )
+    return session.get("chat_history", []) if session else []
 
 def get_stage(session_id: str) -> str:
     """
-    Returns the current stage for a given session.
+    Returns the current stage for a given session from MongoDB.
     """
     session = get_session(session_id)
-    return session["stage"]
+    return session.get("stage", "initial") if session else "initial"
 
 def set_stage(session_id: str, stage: str):
     """
-    Sets the stage for a given session.
+    Sets the stage for a given session in MongoDB.
     """
-    session = get_session(session_id)
-    old_stage = session.get("stage", "initial")
-    session["stage"] = stage
+    if conversations_collection is None: return
+    
+    old_stage_doc = conversations_collection.find_one({"session_id": session_id}, {"stage": 1})
+    old_stage = old_stage_doc.get("stage", "initial") if old_stage_doc else "initial"
+
+    conversations_collection.update_one(
+        {"session_id": session_id},
+        {"$set": {"stage": stage, "last_active": datetime.now()}}
+    )
     logger.info(f"Session {session_id} stage changed: {old_stage} -> {stage}")
 
 def update_conversation_context(session_id: str, **kwargs):
     """
-    Updates conversation context for better intelligence.
+    Updates conversation context in MongoDB using dot notation.
     """
-    session = get_session(session_id)
-    context = session["conversation_context"]
-    
-    for key, value in kwargs.items():
-        context[key] = value  # Always update/add the key-value pair
-    
+    if conversations_collection is None: return
+
+    update_fields = {f"conversation_context.{key}": value for key, value in kwargs.items()}
+    update_fields["last_active"] = datetime.now()
+
+    conversations_collection.update_one(
+        {"session_id": session_id},
+        {"$set": update_fields}
+    )
     logger.debug(f"Updated conversation context for session {session_id}: {kwargs}")
+
 
 def set_collected_info(session_id: str, info_type: str, value: Any):
     """
-    Stores collected information for the session.
+    Stores collected information for the session in MongoDB.
     """
-    session = get_session(session_id)
-    session["collected_info"][info_type] = value
+    if conversations_collection is None: return
+    
+    conversations_collection.update_one(
+        {"session_id": session_id},
+        {"$set": {f"collected_info.{info_type}": value, "last_active": datetime.now()}}
+    )
     logger.debug(f"Stored {info_type} for session {session_id}")
 
 def get_collected_info(session_id: str, info_type: str = None) -> Any:
     """
-    Retrieves collected information from the session.
+    Retrieves collected information from the session in MongoDB.
     """
     session = get_session(session_id)
-    if info_type:
-        return session["collected_info"].get(info_type)
-    return session["collected_info"]
+    if not session: return {}
 
-def increment_error_count(session_id: str):
+    collected_info = session.get("collected_info", {})
+    if info_type:
+        return collected_info.get(info_type)
+    return collected_info
+
+def increment_error_count(session_id: str) -> int:
     """
-    Increments error count for session monitoring.
+    Increments error count for a session in MongoDB and returns the new count.
     """
-    session = get_session(session_id)
-    session["conversation_context"]["error_count"] += 1
-    error_count = session["conversation_context"]["error_count"]
+    if conversations_collection is None: return 0
+
+    updated_session = conversations_collection.find_one_and_update(
+        {"session_id": session_id},
+        {
+            "$inc": {"conversation_context.error_count": 1},
+            "$set": {"last_active": datetime.now()}
+        },
+        return_document=ReturnDocument.AFTER
+    )
+    
+    error_count = updated_session.get("conversation_context", {}).get("error_count", 0)
     
     if error_count > 5:
         logger.warning(f"High error count ({error_count}) for session {session_id}")
@@ -128,37 +195,16 @@ def increment_error_count(session_id: str):
 
 def cleanup_old_sessions(max_age_hours: int = 24):
     """
-    Removes sessions older than specified hours.
+    Removes sessions from MongoDB older than specified hours.
     """
+    if conversations_collection is None: return 0
+    
     cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
-    to_remove = []
+    result = conversations_collection.delete_many(
+        {"last_active": {"$lt": cutoff_time}}
+    )
     
-    for session_id, session in SESSIONS.items():
-        if session.get("last_active", datetime.now()) < cutoff_time:
-            to_remove.append(session_id)
-    
-    for session_id in to_remove:
-        del SESSIONS[session_id]
-        logger.info(f"Cleaned up old session: {session_id}")
-    
-    return len(to_remove)
-
-def get_session_stats() -> Dict[str, Any]:
-    """
-    Returns statistics about active sessions.
-    """
-    total_sessions = len(SESSIONS)
-    active_sessions = 0
-    total_messages = 0
-    
-    for session in SESSIONS.values():
-        if session.get("last_active", datetime.min) > datetime.now() - timedelta(hours=1):
-            active_sessions += 1
-        total_messages += session.get("message_count", 0)
-    
-    return {
-        "total_sessions": total_sessions,
-        "active_sessions": active_sessions,
-        "total_messages": total_messages,
-        "average_messages_per_session": total_messages / max(total_sessions, 1)
-    }
+    if result.deleted_count > 0:
+        logger.info(f"Cleaned up {result.deleted_count} old session(s).")
+        
+    return result.deleted_count

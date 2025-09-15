@@ -88,18 +88,23 @@ def chunk_faqs(file_path: str):
     logger.info(f"Created {len(chunks)} chunks from {os.path.basename(file_path)}")
     return chunks
 
-def chunk_policy_md(file_path: str):
-    """Chunks a markdown file by sections (headings)."""
-    logger.info(f"Chunking policy file: {file_path}")
+def chunk_policy_md(file_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+    """
+    Chunks a markdown file using a sliding window approach to keep related sections together.
+    """
+    logger.info(f"Chunking policy file with sliding window: {file_path}")
     with open(file_path, 'r', encoding='utf-8') as f:
         text = f.read()
     
-    # Split by lines that start with #, ##, etc. Keep the delimiter.
-    chunks = re.split(r'(?=^#+\s)', text, flags=re.MULTILINE)
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        length_function=len,
+        separators=["\n\n", "\n", " ", ""],  # Sensible separators for markdown
+    )
     
-    # Filter out any empty strings that might result from the split
-    chunks = [chunk.strip() for chunk in chunks if chunk.strip()]
-        
+    chunks = text_splitter.split_text(text)
+    
     logger.info(f"Created {len(chunks)} chunks from {os.path.basename(file_path)}")
     return chunks
 

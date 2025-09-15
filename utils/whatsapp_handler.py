@@ -16,7 +16,7 @@ from fastapi import Request, Response
 import requests
 from agents.intelligent_orchestrator import orchestrate_chat
 from agents.fallback_system import get_fallback_response
-from app.session_manager import get_session_stats, cleanup_old_sessions
+from app.session_manager import cleanup_old_sessions
 
 logger = logging.getLogger(__name__)
 
@@ -323,9 +323,6 @@ class WhatsAppMessageHandler:
             # Clean up old sessions periodically
             cleanup_old_sessions(max_age_hours=24)
             
-            # Get session statistics
-            session_stats = get_session_stats()
-            
             # Get rate limiting stats
             active_users = len([
                 phone for phone, timestamps in self.message_counts.items()
@@ -335,7 +332,6 @@ class WhatsAppMessageHandler:
             return {
                 "status": "healthy",
                 "timestamp": datetime.now().isoformat(),
-                "sessions": session_stats,
                 "active_rate_limited_users": active_users,
                 "webhook_verification_token_configured": bool(self.verify_token)
             }

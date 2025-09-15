@@ -44,6 +44,29 @@ class RAGAgent:
                 logger.warning(f"⚠️ No documents found for query: '{query}'")
                 return "I couldn't find any specific information for your query. Could you please rephrase it?"
 
+            # --- DEBUG LOGGING: Print retrieved chunks ---
+            logger.info(f"📚 Retrieved {len(response.objects)} chunks for RAG synthesis.")
+            
+            # Detailed object analysis for debugging
+            for i, obj in enumerate(response.objects):
+                chunk_num = i + 1
+                logger.info(f"  === CHUNK {chunk_num} ANALYSIS ===")
+                logger.info(f"    Object UUID: {getattr(obj, 'uuid', 'N/A')}")
+                
+                if hasattr(obj, 'properties'):
+                    props = obj.properties
+                    logger.info(f"    Properties keys: {list(props.keys()) if props else 'None'}")
+                    
+                    # Log each property for detailed inspection
+                    for key, value in props.items():
+                        value_preview = repr(value)[:100] + '...' if isinstance(value, str) and len(value) > 100 else repr(value)
+                        logger.info(f"      - {key}: {value_preview}")
+                else:
+                    logger.info(f"    No properties attribute found")
+                logger.info(f"  ========================")
+
+            # --- END DEBUG LOGGING ---
+
             # Synthesize the final answer using the retrieved chunks
             context_str = "\n---\n".join([obj.properties['content'] for obj in response.objects])
             
