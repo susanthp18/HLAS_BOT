@@ -340,8 +340,15 @@ Chat History:
                         if primary_intent_result.intent == "policy_claim_status":
                             logger.info(f"Detected policy/claim status check. Providing stubbed response.")
                             agent_response = """*Policy/Claim Status Check*\n\nCurrently under development.\n\nWill require NRIC number when available.\n\nCan I help with:\n• Coverage questions\n• Benefits information\n• New insurance purchase"""
+                        
+                        # Case 2: User is asking for a live agent
+                        elif primary_intent_result.intent == "connect_to_live_agent":
+                            logger.info(f"Detected live agent request in recommendation stage. Providing placeholder.")
+                            update_conversation_context(session_id, live_agent_request=True, last_intent="connect_to_live_agent")
+                            set_stage(session_id, "live_agent")
+                            agent_response = "I'll connect you to our live agent shortly. Please wait while we transfer you to a specialist who can assist you better! 👥"
 
-                        # Case 2: Fallback to RAG if it's not a clear special intent
+                        # Case 3: Fallback to RAG if it's not a clear special intent
                         else:
                             logger.info(f"Re-classification did not yield a clear action. Treating as policy question for current product: {current_product}")
                             from .rag_agent import get_rag_response
