@@ -3,7 +3,8 @@ import logging
 from typing import Dict, List, Any, Optional
 from app.session_manager import (
     get_session, update_session, get_chat_history, get_stage, set_stage,
-    update_conversation_context, increment_error_count, set_collected_info
+    update_conversation_context, increment_error_count, set_collected_info,
+    conversations_collection
 )
 from .primary_intent_agent import get_primary_intent, Product, validate_user_input
 from .conversation_flow_manager import should_continue_with_current_agent
@@ -312,11 +313,12 @@ Chat History:
                     # This is a product switch. Handle it regardless of the recommendation stage intent.
                     logger.info(f"Detected product switch during recommendation stage from {current_product} to {primary_intent_result.product}.")
                     
-                    # Clear the collected info for the old product to ensure a fresh start.
-                    if hasattr(current_product, 'value'):
-                        old_product_key = f"{current_product.value.lower()}_info"
-                        logger.info(f"Clearing stale data for old product: '{old_product_key}'")
-                        set_collected_info(session_id, old_product_key, {})
+                    # Clear all collected info for a fresh start on product switch.
+                    conversations_collection.update_one(
+                        {"session_id": session_id},
+                        {"$set": {"collected_info": {}}}
+                    )
+                    logger.info(f"Cleared all collected_info for session {session_id} on product switch")
 
                     # Update context and route to the new flow
                     update_conversation_context(session_id, primary_product=primary_intent_result.product, last_intent="product_inquiry")
