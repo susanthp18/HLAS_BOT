@@ -101,6 +101,7 @@ You should classify the user's intent into one of the following categories:
 - 'informational': For informational queries about insurance terms, coverage details, benefits, or general questions that can be answered from documentation (e.g., "what countries are covered?", "what does curtailment mean?", "what is covered under liability?", "explain deductible").
 - 'policy_claim_status': For checking actual policy or claim status (requires NRIC/policy number) - currently under implementation.
 - 'product_inquiry': For when the user wants to buy/purchase insurance or get a quote (e.g., "I need travel insurance", "I want to buy maid insurance").
+- 'connect_to_live_agent': For explicit requests to speak to a live agent or human support (e.g., 'live agent', 'talk to human', 'connect to support', 'human agent').
 
 IMPORTANT: If the user asks for the definition/meaning/explanation of an insurance term or coverage details that can be found in documentation, treat this as 'informational', NOT 'unwanted'.
 
