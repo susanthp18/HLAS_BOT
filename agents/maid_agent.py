@@ -49,7 +49,7 @@ def run_maid_agent(user_message: str, chat_history: list, session_id: str):
         SystemMessage(
             content=f"""You are a friendly and helpful maid insurance assistant. Your goal is to collect the following information from the user: {', '.join(required_info)}.
 
-Current collected information: {collected_info}
+Current collected information: {maid_info}
 Conversation history: {chat_history}
 
 IMPORTANT EXTRACTION RULES:
