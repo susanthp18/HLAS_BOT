@@ -263,6 +263,14 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
             update_session(session_id, user_message, validation_result["message"])
             return validation_result["message"]
         
+        # ** GLOBAL UAT HOTFIX for DISABLED MAID PRODUCT **
+        # If the user explicitly mentions "maid" insurance at any point, provide a specific fallback.
+        if "maid" in user_message.lower():
+            logger.warning("User mentioned disabled 'maid' product. Providing UAT-specific fallback.")
+            agent_response = "I apologize, but the Maid insurance service is temporarily unavailable. I can only assist with Travel insurance at the moment. Would you like to know more about our Travel plans?"
+            update_session(session_id, user_message, agent_response)
+            return agent_response
+
         chat_history = get_chat_history(session_id)
         stage = get_stage(session_id)
         session = get_session(session_id)
