@@ -58,7 +58,7 @@ def handle_unknown_product_intelligently(user_message: str, chat_history: list, 
                 if collected_info:
                     logger.info(f"LLM routing to PAYMENT agent for session {session_id}")
                     set_stage(session_id, "payment")
-                    payment_response = run_payment_agent(user_message, chat_history)
+                    payment_response = run_payment_agent(user_message, chat_history, session_id)
                     if isinstance(payment_response, dict):
                         return payment_response.get("output", "I'll help you with the payment process! 💳")
                     else:
@@ -224,6 +224,24 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
                 logger.info(f"Processing payment stage message for session {session_id}")
                 response_data = run_payment_agent(user_message, chat_history, session_id)
                 
+                # Check if the payment agent has signaled a context switch
+                if response_data.get("requires_context_switch"):
+                    logger.warning(f"Payment agent signaled a context switch for session {session_id}. Resetting flow.")
+                    
+                    # 1. Clear all collected info for a completely fresh start.
+                    conversations_collection.update_one(
+                        {"session_id": session_id},
+                        {"$set": {"collected_info": {}}}
+                    )
+                    logger.info(f"Cleared all collected_info for session {session_id} on context switch.")
+                    
+                    # 2. Reset the stage.
+                    set_stage(session_id, "initial")
+                    
+                    # 3. Re-route the original message through the main orchestrator logic to handle the new intent.
+                    # We call orchestrate_chat again to restart the process cleanly.
+                    return orchestrate_chat(user_message, session_id)
+
                 if isinstance(response_data, dict):
                     agent_response = response_data.get("output", "I'm processing your payment information. Please provide your details.")
                 else:
