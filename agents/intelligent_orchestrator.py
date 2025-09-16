@@ -9,13 +9,56 @@ from app.session_manager import (
 from .primary_intent_agent import get_primary_intent, Product, validate_user_input
 from .conversation_flow_manager import should_continue_with_current_agent
 from .travel_agent import run_travel_agent
-from .maid_agent import run_maid_agent
+# from .maid_agent import run_maid_agent
 from .payment_agent import run_payment_agent
 from .fallback_system import get_fallback_response, handle_agent_failure, detect_confusion
 from langchain.schema.messages import HumanMessage, AIMessage, SystemMessage
 from app.config import llm
+from pydantic import BaseModel, Field
+from typing import List
+from .rec_retriever_agent import get_available_tiers, generate_plan_comparison_table
 
 logger = logging.getLogger(__name__)
+
+class TierExtraction(BaseModel):
+    tiers: List[str] = Field(default=[], description="A list of insurance plan tiers mentioned by the user for comparison, e.g., ['Gold', 'Silver']. Should be an empty list if no specific tiers are mentioned.")
+
+def extract_comparison_tiers(user_message: str, product: str, chat_history: list, session_id: str) -> List[str]:
+    """
+    Intelligently extracts which plan tiers a user wants to compare.
+    """
+    logger.info(f"Extracting comparison tiers from user message: '{user_message}'")
+    available_tiers = get_available_tiers(product)
+    
+    # Get the previously recommended plan from session context if it exists
+    session = get_session(session_id)
+    recommended_plan = session.get("conversation_context", {}).get("recommended_plan")
+    
+    system_prompt = f"""You are an expert at extracting specific entities from a user's message in the context of a conversation.
+The user is talking about {product} insurance and wants to compare plan tiers.
+The available tiers are: {', '.join(available_tiers)}.
+
+- Analyze the user's message and the conversation history.
+- Identify any specific plan tiers the user mentions.
+- If the user uses vague terms like "this one", "that one", or "it", and a plan was just recommended, you should assume they are referring to the recommended plan. The previously recommended plan was: '{recommended_plan}'.
+- Return a list of the tier names. If they don't mention any specific tiers, return an empty list.
+
+Conversation History (most recent messages):
+{chat_history[-4:]}
+"""
+    
+    chain = llm.with_structured_output(TierExtraction, method="function_calling")
+    
+    try:
+        response = chain.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"User's request: {user_message}")
+        ])
+        logger.info(f"Extracted tiers for comparison: {response.tiers}")
+        return response.tiers
+    except Exception as e:
+        logger.error(f"Failed to extract comparison tiers: {e}")
+        return [] # Return empty list on failure
 
 def handle_unknown_product_intelligently(user_message: str, chat_history: list, session_id: str) -> str:
     """
@@ -38,15 +81,15 @@ def handle_unknown_product_intelligently(user_message: str, chat_history: list, 
                 else:
                     return travel_response
                     
-            elif intent_result.product == Product.MAID:
-                logger.info(f"LLM routing to MAID agent for session {session_id}")
-                update_conversation_context(session_id, primary_product=Product.MAID, last_intent="product_inquiry")
-                set_stage(session_id, "maid_inquiry")
-                maid_response = run_maid_agent(user_message, chat_history, session_id)
-                if isinstance(maid_response, dict):
-                    return maid_response.get("output", "I'd be happy to help with maid insurance! 🏠")
-                else:
-                    return maid_response
+            # elif intent_result.product == Product.MAID:
+            #     logger.info(f"LLM routing to MAID agent for session {session_id}")
+            #     update_conversation_context(session_id, primary_product=Product.MAID, last_intent="product_inquiry")
+            #     set_stage(session_id, "maid_inquiry")
+            #     maid_response = run_maid_agent(user_message, chat_history, session_id)
+            #     if isinstance(maid_response, dict):
+            #         return maid_response.get("output", "I'd be happy to help with maid insurance! 🏠")
+            #     else:
+            #         return maid_response
         
         # Handle different intents based on LLM classification
         if hasattr(intent_result, 'intent'):
@@ -68,10 +111,11 @@ def handle_unknown_product_intelligently(user_message: str, chat_history: list, 
 
 But first, let me recommend the perfect insurance plan for you. Which type are you interested in?
 
-🌍 **Travel Insurance** - for your trips and vacations  
-🏠 **Maid Insurance** - for your domestic helper
-
-Once I recommend the best plan with all coverage details, we can proceed with payment! 😊"""
+🌍 **Travel Insurance** - for your trips and vacations
+"""
+# 🏠 **Maid Insurance** - for your domestic helper
+# 
+# Once I recommend the best plan with all coverage details, we can proceed with payment! 😊"""
                     
             elif intent_result.intent == "product_inquiry":
                 # General product inquiry - guide to product selection
@@ -80,9 +124,10 @@ Once I recommend the best plan with all coverage details, we can proceed with pa
 To recommend the best plan for you, I need to know what type of insurance you're interested in:
 
 🌍 **Travel Insurance** - for your trips and vacations
-🏠 **Maid Insurance** - for your domestic helper
-
-Which type would you like to explore? Once you choose, I'll ask a few quick questions and recommend the perfect plan with all the coverage details! ✨"""
+"""
+# 🏠 **Maid Insurance** - for your domestic helper
+# 
+# Which type would you like to explore? Once you choose, I'll ask a few quick questions and recommend the perfect plan with all the coverage details! ✨"""
                 
             elif intent_result.intent == "informational":
                 # Handle informational questions when product is unknown
@@ -90,7 +135,7 @@ Which type would you like to explore? Once you choose, I'll ask a few quick ques
                 set_stage(session_id, "awaiting_product_for_rag")
                 update_conversation_context(session_id, pending_rag_question=user_message)
                 
-                return """I can help with that.\n\nWhich insurance?\n• Travel Insurance\n• Maid Insurance"""
+                return """I can help with that.\n\nWhich insurance?\n• Travel Insurance"""
         
         # Default to intelligent guidance
         return provide_intelligent_guidance(user_message, chat_history, session_id)
@@ -108,10 +153,11 @@ def provide_intelligent_guidance(user_message: str, chat_history: list, session_
         # Analyze conversation context for intelligent guidance
         if len(chat_history) <= 2:
             # Early in conversation - provide welcoming guidance
-            return "Great! I can help you with Travel insurance for your trips or Maid insurance for your domestic helper. Which would you like to learn about? ✈️🏠"
+            # return "Great! I can help you with Travel insurance for your trips or Maid insurance for your domestic helper. Which would you like to learn about? ✈️🏠"
+            return "Great! I can help you with Travel insurance for your trips. Which would you like to learn about? ✈️"
         else:
             # Later in conversation - provide contextual guidance
-            return "I want to make sure I help you with the right information! Are you interested in:\n\n🌍 Travel insurance for your trips\n🏠 Maid insurance for your domestic helper\n\nJust let me know which one! 😊"
+            return "I want to make sure I help you with the right information! Are you interested in Travel insurance for your trips? Just let me know! 😊"
             
     except Exception as e:
         logger.error(f"Error providing intelligent guidance: {str(e)}")
@@ -133,9 +179,12 @@ def get_whatsapp_fallback_response(intent_type: str, requires_clarification: boo
             "To better assist you, could you please clarify what type of insurance you're interested in? 🤝"
         ],
         "off_topic": [
-            "I specialize in helping with insurance questions! 😊 What can I help you with regarding Travel or Maid insurance?",
-            "I'm here to assist with your insurance needs. How can I help with Travel or Maid insurance today? 🛡️",
-            "Let's talk insurance! I can help you with Travel or Maid insurance. What would you like to know? ✈️🏠"
+            # "I specialize in helping with insurance questions! 😊 What can I help you with regarding Travel or Maid insurance?",
+            "I specialize in helping with insurance questions! 😊 What can I help you with regarding Travel insurance?",
+            # "I'm here to assist with your insurance needs. How can I help with Travel or Maid insurance today? 🛡️",
+            "I'm here to assist with your insurance needs. How can I help with Travel insurance today? 🛡️",
+            # "Let's talk insurance! I can help you with Travel or Maid insurance. What would you like to know? ✈️🏠"
+            "Let's talk insurance! I can help you with Travel insurance. What would you like to know? ✈️"
         ],
         "error": [
             "Oops! Something went wrong on my end. 😅 Could you please try again?",
@@ -181,9 +230,12 @@ def get_contextual_greeting() -> str:
         time_greeting = "Hello"
     
     greetings = [
-        f"{time_greeting}! 😊 I'm here to help you with Travel and Maid insurance. What can I assist you with today?",
-        f"{time_greeting}! 👋 Welcome to HLAS! I can help you with Travel or Maid insurance. How may I help you?",
-        f"{time_greeting}! 🌟 I'm your insurance assistant. I specialize in Travel and Maid insurance. What would you like to know?"
+        # f"{time_greeting}! 😊 I'm here to help you with Travel and Maid insurance. What can I assist you with today?",
+        f"{time_greeting}! 😊 I'm here to help you with Travel insurance. What can I assist you with today?",
+        # f"{time_greeting}! 👋 Welcome to HLAS! I can help you with Travel or Maid insurance. How may I help you?",
+        f"{time_greeting}! 👋 Welcome to HLAS! I can help you with Travel insurance. How may I help you?",
+        # f"{time_greeting}! 🌟 I'm your insurance assistant. I specialize in Travel and Maid insurance. What would you like to know?"
+        f"{time_greeting}! 🌟 I'm your insurance assistant. I specialize in Travel insurance. What would you like to know?"
     ]
     
     import random
@@ -281,7 +333,7 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
             else:
                 # Product still not identified, re-prompt
                 logger.info(f"Product still not identified. Re-prompting.")
-                agent_response = """Which insurance?\n• Travel Insurance\n• Maid Insurance"""
+                agent_response = """Which insurance?\n• Travel Insurance"""
                 
         # Handle recommendation stage - LLM-powered decision making
         elif stage == "recommendation":
@@ -289,7 +341,6 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
                 logger.info(f"Processing recommendation stage message for session {session_id}")
                 
                 # Use LLM to understand user intent in recommendation stage
-                from pydantic import BaseModel, Field
                 
                 class RecommendationStageIntent(BaseModel):
                     intent: str = Field(..., description="User's intent: 'purchase' (wants to buy/proceed), 'plan_comparison' (wants different/other plans), 'policy_question' (has questions about coverage), or 'other'")
@@ -353,13 +404,18 @@ Chat History:
                     
                     elif intent_result.intent == "plan_comparison" and intent_result.confidence > 0.6:
                         logger.info(f"User asking for plan comparison for session {session_id}")
-                        from .rag_agent import get_rag_response
-                        # Use the user's message directly as the query to get specific comparisons
-                        query = user_message
+                        
                         # Convert product enum to string for collection lookup
                         product_str = current_product.value if hasattr(current_product, 'value') else str(current_product)
-                        agent_response = get_rag_response(query, chat_history, product_str)
-                        agent_response += "\n\nWould you like to proceed with a different plan or continue with the current recommendation? Or do you have other questions about the coverage?"
+
+                        # Intelligently extract which tiers the user wants to compare
+                        requested_tiers = extract_comparison_tiers(user_message, product_str, chat_history, session_id)
+                        
+                        # Generate the full comparison table, highlighting the requested tiers
+                        agent_response = generate_plan_comparison_table(product_str, requested_tiers)
+
+                        # Add a follow-up prompt
+                        agent_response += "\n\nWould you like to proceed with one of these plans or do you have other questions?"
                     
                     elif intent_result.intent == "other" and intent_result.confidence > 0.6:
                         logger.info(f"Recommendation stage intent is 'other'. Already checked for product switch. Now checking for special intents.")
@@ -396,6 +452,16 @@ Chat History:
                 logger.error(f"Recommendation stage error for session {session_id}: {str(e)}")
                 agent_response = "I'm having a technical issue. 😅 Could you please rephrase your question or let me know if you'd like to proceed with the purchase?"
                 
+        elif stage == "travel_inquiry":
+            # If we are in the data collection flow for travel, all messages should go to the travel agent.
+            # This prevents ambiguous answers from being mis-routed to RAG.
+            logger.info(f"Continuing dedicated 'travel_inquiry' flow for session {session_id}.")
+            response_data = run_travel_agent(user_message, chat_history, session_id)
+            if isinstance(response_data, dict):
+                agent_response = response_data.get("output", "I'm processing your travel details. One moment please.")
+            else:
+                agent_response = str(response_data)
+
         else:
             # *** ROBUST LLM-POWERED CONVERSATION FLOW ROUTING ***
             # Use intelligent conversation flow analysis
@@ -484,7 +550,7 @@ Chat History:
                     set_stage(session_id, "awaiting_product_for_rag")
                     update_conversation_context(session_id, pending_rag_question=user_message)
                     
-                    agent_response = """I can help with that.\n\nWhich insurance?\n• Travel Insurance\n• Maid Insurance"""
+                    agent_response = """I can help with that.\n\nWhich insurance?\n• Travel Insurance"""
             elif intent == "policy_claim_status":
                 # Handle actual policy/claim status checks (requires NRIC)
                 logger.info(f"🔍 MAIN HANDLER: Processing policy/claim status check for session {session_id}")
@@ -497,7 +563,8 @@ Chat History:
             else:
                 # Skip confusion detection during data collection stages for travel/maid agents,
                 # as it can misinterpret valid contextual inputs like dates or numbers.
-                is_data_collection_stage = should_continue and product in [Product.TRAVEL, Product.MAID]
+                # is_data_collection_stage = should_continue and product in [Product.TRAVEL, Product.MAID]
+                is_data_collection_stage = should_continue and product in [Product.TRAVEL]
                 confusion_response = None
                 if not is_data_collection_stage:
                     confusion_response = detect_confusion(session_id, user_message)
@@ -543,7 +610,7 @@ def process_normal_intent(intent_result, user_message: str, chat_history: list, 
         
         agent_map = {
             Product.TRAVEL: run_travel_agent,
-            Product.MAID: run_maid_agent,
+            # Product.MAID: run_maid_agent,
         }
 
         if intent == "payment_inquiry":
@@ -568,8 +635,8 @@ def process_normal_intent(intent_result, user_message: str, chat_history: list, 
                 # Pass session_id to agents that support it
                 if product == Product.TRAVEL:
                     response_data = agent_function(user_message, chat_history, session_id)
-                elif product == Product.MAID:
-                    response_data = agent_function(user_message, chat_history, session_id)
+                # elif product == Product.MAID:
+                #     response_data = agent_function(user_message, chat_history, session_id)
                 else:
                     response_data = agent_function(user_message, chat_history)
                 

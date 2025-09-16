@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class Product(str, Enum):
     """Enumeration for the different products."""
     TRAVEL = "TRAVEL"
-    MAID = "MAID"
+    # MAID = "MAID"  # Disabled for UAT - Travel only
     POLICY_CLAIM_STATUS = "POLICY_CLAIM_STATUS"
     UNKNOWN = "UNKNOWN"
 
@@ -100,26 +100,26 @@ You should classify the user's intent into one of the following categories:
 - 'unwanted': For irrelevant or spam messages.
 - 'informational': For informational queries about insurance terms, coverage details, benefits, or general questions that can be answered from documentation (e.g., "what countries are covered?", "what does curtailment mean?", "what is covered under liability?", "explain deductible").
 - 'policy_claim_status': For checking actual policy or claim status (requires NRIC/policy number) - currently under implementation.
-- 'product_inquiry': For when the user wants to buy/purchase insurance or get a quote (e.g., "I need travel insurance", "I want to buy maid insurance").
+- 'product_inquiry': For when the user wants to buy/purchase insurance or get a quote (e.g., "I need travel insurance").
+# Maid disabled for UAT - Travel only
 - 'connect_to_live_agent': For explicit requests to speak to a live agent or human support (e.g., 'live agent', 'talk to human', 'connect to support', 'human agent').
 
 IMPORTANT: If the user asks for the definition/meaning/explanation of an insurance term or coverage details that can be found in documentation, treat this as 'informational', NOT 'unwanted'.
 
 For both 'product_inquiry' AND 'informational', you must also identify the product when possible. The available products are:
 - 'TRAVEL': For travel insurance, travel policies, Travel Protect360, trip insurance, travel coverage.
-- 'MAID': For maid insurance, domestic helper insurance, foreign worker insurance, maid policies.
+# MAID disabled for UAT - Travel only
 
 IMPORTANT: Even for policy questions, try to detect the product from context:
 - "Travel Protect360 policy" → TRAVEL
 - "travel insurance", "trip insurance", "travel coverage", "travel policy" → TRAVEL
-- "personal liability under travel", "travel" + any policy terms → TRAVEL  
-- "maid insurance", "domestic helper insurance", "foreign worker insurance" → MAID
-- "domestic helper policy", "maid policy", "maid coverage" → MAID
+- "personal liability under travel", "travel" + any policy terms → TRAVEL
+# Maid disabled for UAT - Travel only
 
 Consider the entire conversation history to make an informed decision.
 
 REMEMBER: If you see words like "travel", "trip", "Travel Protect360" → set product to TRAVEL
-If you see words like "maid", "domestic helper", "foreign worker" → set product to MAID
+# Maid disabled for UAT - Travel only
 
 Edge cases and disambiguation:
 - If the message could plausibly be about insurance (e.g., insurance terms like curtailment, deductible, excess, pre-existing condition), classify as 'informational' even if the product is not mentioned. Prefer Product.UNKNOWN in that case unless the product is explicitly implied by context.

@@ -7,18 +7,17 @@ logger = logging.getLogger(__name__)
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-class RecRetrieverAgent:
+def get_available_tiers(product: str) -> list:
+    """Returns a list of available plan tiers for a given product."""
+    if product.upper() == "TRAVEL":
+        return ["Basic", "Silver", "Gold", "Platinum"]
+    # elif product.upper() == "MAID":
+    #     return ["Basic", "Standard", "Premier"]
+    else:
+        # Fallback for unknown products
+        return ["Basic", "Standard", "Premium"]
 
-    def get_tier_names(self, product: str):
-        """
-        Get available tier names for the product.
-        """
-        if product.upper() == "TRAVEL":
-            return ["Basic", "Silver", "Gold", "Platinum"]
-        elif product.upper() == "MAID":
-            return ["Basic", "Standard", "Premier"]
-        else:
-            return ["Basic", "Standard", "Premium"]
+class RecRetrieverAgent:
 
     def get_recommendation_message(self, product: str, plan_tier: str):
         """
@@ -34,7 +33,7 @@ class RecRetrieverAgent:
                 Filter.by_property("doc_type").equal("benefits")
             ])
             
-            logger.info(f"🔍 QUERY DEBUG: Searching for product='{product}', doc_type='benefits', limit=15")
+            logger.info(f"🔍 QUERY DEBUG: Searching for product='{product}', doc_type='benefits', plan='{plan_tier}', limit=15")
             logger.info(f"🔍 QUERY DEBUG: Product type: {type(product)}, Product repr: {repr(product)}")
             
             # Also try a broader query to see what's actually in the database
@@ -126,7 +125,7 @@ class RecRetrieverAgent:
             retrieved_benefits = f"I'm having trouble accessing the {product} insurance benefits right now."
 
         # Get tier names for the product
-        tier_names = self.get_tier_names(product)
+        tier_names = get_available_tiers(product)
         try:
             current_tier_index = tier_names.index(plan_tier)
             lower_tiers = tier_names[:current_tier_index]
@@ -179,3 +178,72 @@ def get_recommendation_message(product: str, plan_tier: str):
     Main entry point for generating the recommendation message.
     """
     return rec_retriever_agent.get_recommendation_message(product, plan_tier)
+
+def generate_plan_comparison_table(product: str, requested_tiers: list):
+    """
+    Fetches all benefit chunks for a product and uses an LLM to generate a markdown comparison table.
+    """
+    logger.info(f"Generating plan comparison table for {product}, highlighting {requested_tiers}")
+
+    try:
+        # 1. Fetch ALL benefit chunks from Weaviate
+        client = get_weaviate_client()
+        collection = client.collections.get("Insurance_Knowledge_Base")
+
+        response = collection.query.fetch_objects(
+            filters=Filter.all_of([
+                Filter.by_property("product_name").equal(product),
+                Filter.by_property("doc_type").equal("benefits")
+            ]),
+            limit=100  # Set a high limit to fetch all benefit chunks
+        )
+
+        if not response.objects:
+            logger.warning(f"No benefit documents found for product: {product}")
+            return "I couldn't find any benefit information to create a comparison. Please check if the documents have been embedded correctly."
+
+        # 2. Combine all chunks into a single context string
+        context_str = "\n---\n".join([obj.properties['content'] for obj in response.objects])
+        logger.info(f"Combined {len(response.objects)} benefit chunks into a single context of {len(context_str)} characters.")
+
+        # 3. Get available tiers to inform the LLM
+        available_tiers = get_available_tiers(product)
+
+        # 4. Create an enhanced prompt for the LLM
+        system_prompt = f"""You are an expert insurance assistant. Your task is to create a detailed and accurate comparison of insurance plan tiers, formatted for easy reading on WhatsApp.
+
+PRODUCT: {product} Insurance
+ALL AVAILABLE TIERS: {', '.join(available_tiers)}
+USER IS INTERESTED IN: {', '.join(requested_tiers) if requested_tiers else 'all tiers'}
+
+INSTRUCTIONS:
+1.  Analyze the provided 'BENEFITS INFORMATION' which contains all coverage details.
+2.  For each of the tiers the user is interested in ({', '.join(requested_tiers) if requested_tiers else 'all tiers'}), create a separate section.
+3.  Each section should start with the plan name in bold (e.g., *Gold Plan*).
+4.  Under each plan name, list its key benefits and coverage amounts using bullet points (•).
+5.  Keep the descriptions concise and clear.
+6.  After presenting the details for the requested plans, add a "SUMMARY" section.
+7.  In the summary, provide a short, 2-3 sentence comparison of the key differences between the requested plans ({', '.join(requested_tiers) if requested_tiers else 'all tiers'}). For example: "The Gold plan offers higher medical coverage, while the Silver plan is more budget-friendly but still covers all the essentials."
+8.  Ensure all information is accurate and based *only* on the provided context. Do not use markdown tables.
+"""
+
+        human_prompt = f"""BENEFITS INFORMATION:
+---
+{context_str}
+---
+
+Now, please generate the WhatsApp-friendly comparison and summary based on the instructions.
+"""
+        prompt = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_prompt),
+        ]
+
+        # 5. Call the LLM to generate the table
+        response = llm.invoke(prompt)
+        logger.info("Successfully generated plan comparison text.")
+        return response.content
+
+    except Exception as e:
+        logger.error(f"Failed to generate plan comparison table: {e}")
+        return "I'm sorry, I encountered an error while trying to create the plan comparison. Please try again later."

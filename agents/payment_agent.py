@@ -69,8 +69,8 @@ def run_payment_agent(user_message: str, chat_history: list, session_id: str) ->
         
         if not primary_product:
             return {
-                "output": "I need to know which insurance product you're interested in purchasing. Please let me know if it's Travel or Maid insurance.",
-                "stage": "error"
+                "output": "I need to know which insurance product you're interested in purchasing. Please let me know if it's Travel insurance.",
+                "stage": "initial"
             }
         
         # Convert enum to string if needed

@@ -47,14 +47,43 @@ class FallbackManager:
                 "Let me connect you with our support team for better assistance. 📞 Please contact support@hlas.com.sg or call +65 6227 7888."
             ],
             "off_topic": [
-                "I specialize in helping with insurance questions! 😊 What can I help you with regarding Travel or Maid insurance?",
-                "I'm here to assist with your insurance needs. How can I help with Travel or Maid insurance today? 🛡️",
-                "Let's talk insurance! I can help you with Travel or Maid insurance. What would you like to know? ✈️🏠"
+                "I specialize in helping with insurance questions! 😊 What can I help you with regarding Travel insurance?",
+                "I'm here to assist with your insurance needs. How can I help with Travel insurance today? 🛡️",
+                "Let's talk insurance! I can help you with Travel insurance. What would you like to know? ✈️"
             ],
             "product_not_available": [
-                "I currently specialize in Travel and Maid insurance! 🌟 Which of these would be helpful for you?",
-                "Right now I can help with Travel and Maid insurance. 😊 Are either of these what you're looking for?",
-                "I'm an expert in Travel and Maid insurance! ✈️🏠 Would you like to know more about either of these?"
+                "I currently specialize in Travel insurance! 🌟 Would this be helpful for you?",
+                "Right now I can help with Travel insurance. 😊 Is this what you're looking for?",
+                "I'm an expert in Travel insurance! ✈️ Would you like to know more about it?"
+            ],
+            "out_of_scope": [
+                "I am not able to help with that. I am trained to help with insurance products only. Is there anything else I can help you with?",
+                "I'm sorry, but I can only provide information about insurance products. What else can I assist you with?"
+            ],
+            "clarification_needed": [
+                "I'm not sure I understand. Could you please rephrase your question?",
+                "I'm here to help with Travel insurance! 😊 What specific information do you need?",
+                "Let me explain! I can help with Travel insurance for your trips. What interests you? ✈️",
+                "I specialize in Travel insurance for your trips. What would you like to know about? 🌟"
+            ],
+            "repeat_query": [
+                "You've asked that before! Is there something specific you're looking for?",
+                "I've already answered that. What else would you like to know?"
+            ],
+            "vague_question": [
+                "Could you please provide more details? I'm not sure what you're asking.",
+                "No worries! Let me make it clearer. 😊 I help with Travel insurance for your trips. Are you interested?",
+                "To give you the best answer, I need a little more information. What are you looking for?"
+            ],
+            "off_topic_after_product": [
+                "Of course! 😊 I help with Travel insurance for your trips. What can I tell you?",
+                "Sure thing! 🌟 I specialize in Travel insurance. What would you like to know about?",
+                "Let's focus on insurance for now. What questions do you have?"
+            ],
+            "unsupported_product": [
+                "I focus on Travel insurance! 😊 While I don't handle other types, I'm an expert in this. Interested?",
+                "Currently I specialize in Travel insurance. 🌟 This is my area of expertise. Would this help you?",
+                "I'm specialized in Travel insurance! 💙 For other types, you'd need our general support team."
             ]
         }
         
@@ -139,18 +168,18 @@ class FallbackManager:
             # Agent-specific fallback responses
             agent_fallbacks = {
                 "travel_agent": [
-                    "I'm having trouble with travel insurance right now. 😅 Could you try asking about general coverage or contact our support team?",
-                    "Let me help differently with travel insurance! ✈️ What specific travel coverage question do you have?",
-                    "I want to ensure you get the right travel insurance info. 🌟 Could you rephrase your question?"
+                    "I'm having a bit of trouble with the travel insurance details right now. 😅 Could you please try again?",
+                    "Let's try that again! What information can I help you with for your travel insurance? 🌍",
+                    "I'm here to help with your travel plans! ✈️ Could you please repeat your question?"
                 ],
-                "maid_agent": [
-                    "I'm experiencing issues with maid insurance processing. 😅 Could you try rephrasing your question?",
-                    "Let me help with maid insurance in a different way! 🏠 What specific coverage do you need to know about?",
-                    "I want to give you accurate maid insurance information. 💙 Could you ask your question differently?"
-                ],
+                # "maid_agent": [
+                #     "I'm experiencing issues with maid insurance processing. 😅 Could you try rephrasing your question?",
+                #     "Let me help with maid insurance in a different way! 🏠 What specific coverage do you need to know about?",
+                #     "I want to give you accurate maid insurance information. 💙 Could you ask your question differently?"
+                # ],
                 "payment_agent": [
-                    "I'm having trouble with the payment system. 😅 Please try again or contact our support team for immediate assistance.",
-                    "Let me help with payment processing! 💳 Could you provide your information again?",
+                    "I'm having an issue with the payment system at the moment. 💳 Please try again in a few moments.",
+                    "Let's get your payment sorted! Could you please provide your details again? 😊",
                     "I want to ensure your payment goes through smoothly. 🛡️ Please try submitting your details once more."
                 ]
             }

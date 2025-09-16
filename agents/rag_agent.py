@@ -12,7 +12,8 @@ class RAGAgent:
         Answers a user's query using a native Weaviate hybrid search.
         """
         if not product:
-            return "Please specify which insurance product you're asking about (Travel or Maid)."
+            # return "Please specify which insurance product you're asking about (Travel or Maid)."
+            return "Please specify that you are asking about Travel insurance."
 
         try:
             logger.info(f"🔍 RAG QUERY - Product: {product}, Query: '{query}'")
