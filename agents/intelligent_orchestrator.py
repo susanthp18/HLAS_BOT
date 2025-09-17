@@ -216,9 +216,15 @@ def handle_low_confidence_intent(intent_result, user_message: str, chat_history:
 def get_contextual_greeting() -> str:
     """
     Generate a contextual greeting for WhatsApp.
+    Uses Singapore time (Asia/Singapore).
     """
-    import datetime
-    hour = datetime.datetime.now().hour
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        hour = datetime.now(ZoneInfo("Asia/Singapore")).hour
+    except Exception:
+        # Fallback to server local time if zoneinfo is unavailable
+        hour = datetime.now().hour
     
     if 5 <= hour < 12:
         time_greeting = "Good morning"
