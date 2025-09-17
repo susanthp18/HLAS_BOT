@@ -179,11 +179,11 @@ def get_recommendation_message(product: str, plan_tier: str):
     """
     return rec_retriever_agent.get_recommendation_message(product, plan_tier)
 
-def generate_plan_comparison_table(product: str, requested_tiers: list):
+def generate_plan_comparison_table(product: str, requested_tiers: list, user_query: str):
     """
     Fetches all benefit chunks for a product and uses an LLM to generate a markdown comparison table.
     """
-    logger.info(f"Generating plan comparison table for {product}, highlighting {requested_tiers}")
+    logger.info(f"Generating plan comparison table for {product}, highlighting {requested_tiers}, focusing on '{user_query}'")
 
     try:
         # 1. Fetch ALL benefit chunks from Weaviate
@@ -215,16 +215,17 @@ def generate_plan_comparison_table(product: str, requested_tiers: list):
 PRODUCT: {product} Insurance
 ALL AVAILABLE TIERS: {', '.join(available_tiers)}
 USER IS INTERESTED IN: {', '.join(requested_tiers) if requested_tiers else 'all tiers'}
+USER'S SPECIFIC QUESTION: {user_query}
 
-INSTRUCTIONS:
-1.  Analyze the provided 'BENEFITS INFORMATION' which contains all coverage details.
-2.  For each of the tiers the user is interested in ({', '.join(requested_tiers) if requested_tiers else 'all tiers'}), create a separate section.
-3.  Each section should start with the plan name in bold (e.g., *Gold Plan*).
-4.  Under each plan name, list its key benefits and coverage amounts using bullet points (•).
-5.  Keep the descriptions concise and clear.
-6.  After presenting the details for the requested plans, add a "SUMMARY" section.
-7.  In the summary, provide a short, 2-3 sentence comparison of the key differences between the requested plans ({', '.join(requested_tiers) if requested_tiers else 'all tiers'}). For example: "The Gold plan offers higher medical coverage, while the Silver plan is more budget-friendly but still covers all the essentials."
-8.  Ensure all information is accurate and based *only* on the provided context. Do not use markdown tables.
+CRITICAL INSTRUCTIONS:
+1.  **Analyze the User's Query First**: Before looking at the context, break down the user's query to identify the specific benefit, plan, and any special conditions (like 'child', 'COVID-19', or 'pre-existing conditions').
+2.  **Match Context Precisely**: Scan the provided 'BENEFITS INFORMATION' for sections that exactly match the user's query. For example, if the user asks about "Overseas Medical Expenses", you must differentiate between the general benefit and more specific ones like "Overseas Medical Expenses due to COVID-19" or "Add-On... Pre-Existing Condition Overseas Medical Expenses".
+3.  **Prioritize Specificity**: Only use information from a specific section (like COVID-19 or Pre-Existing) if the user's query contains those exact keywords. Otherwise, you MUST use the general benefit information.
+4.  **Handle Ambiguity**: If the user's query is slightly ambiguous and could match multiple benefit sections (e.g., a general benefit and a COVID-19 specific one), you MUST present the information for **both** in your comparison, clearly labeling each one (e.g., "• General Medical Expenses: $X", "• COVID-19 Medical Expenses: $Y").
+5.  **Create a Focused Comparison**: For each of the tiers the user is interested in, create a separate section starting with the plan name in bold (e.g., *Gold Plan*).
+6.  **List Relevant Benefits**: Under each plan name, list the key benefits using bullet points (•). If the user asked about a specific benefit, that MUST be the first bullet point.
+7.  **Add a Final Summary**: After the details, add a "SUMMARY" section. This should be a short, 2-3 sentence comparison of the key differences, focusing on the topic of the user's specific question.
+8.  **Accuracy is Key**: Ensure all information is accurate and based *only* on the provided context. Do not use markdown tables.
 """
 
         human_prompt = f"""BENEFITS INFORMATION:
@@ -232,7 +233,7 @@ INSTRUCTIONS:
 {context_str}
 ---
 
-Now, please generate the WhatsApp-friendly comparison and summary based on the instructions.
+Now, please generate the WhatsApp-friendly comparison and summary based on the critical instructions.
 """
         prompt = [
             SystemMessage(content=system_prompt),

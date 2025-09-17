@@ -447,8 +447,8 @@ Chat History:
                         # Intelligently extract which tiers the user wants to compare
                         requested_tiers = extract_comparison_tiers(user_message, product_str, chat_history, session_id)
                         
-                        # Generate the full comparison table, highlighting the requested tiers
-                        agent_response = generate_plan_comparison_table(product_str, requested_tiers)
+                        # Generate the full comparison table, highlighting the requested tiers and focusing on the user's query
+                        agent_response = generate_plan_comparison_table(product_str, requested_tiers, user_message)
 
                         # Add a follow-up prompt
                         agent_response += "\n\nWould you like to proceed with one of these plans or do you have other questions?"

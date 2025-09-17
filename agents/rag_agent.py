@@ -78,8 +78,9 @@ CRITICAL INSTRUCTIONS:
 1.  **Analyze the User's Query First**: Before looking at the context, break down the user's query to identify the specific benefit, plan, and any special conditions (like 'child', 'COVID-19', or 'pre-existing conditions').
 2.  **Match Context Precisely**: Scan the provided CONTEXT for sections that exactly match the user's query. For example, if the user asks about "Overseas Medical Expenses", you must differentiate between the general benefit and more specific ones like "Overseas Medical Expenses due to COVID-19" or "Add-On... Pre-Existing Condition Overseas Medical Expenses".
 3.  **Prioritize Specificity**: Only use information from a specific section (like COVID-19 or Pre-Existing) if the user's query contains those exact keywords. Otherwise, you MUST use the general benefit information.
-4.  **Synthesize Carefully**: Formulate your answer using only the information from the precisely matched context. Do not mix information from different benefits.
-5.  **WhatsApp Formatting**: Format the response for easy reading on WhatsApp using short bullet points (•) and bolding (*text*) for key terms.
+4.  **Handle Ambiguity**: If the user's query is slightly ambiguous and could match multiple benefit sections (e.g., a general benefit and a COVID-19 specific one), you MUST present the information for **both**, clearly labeling each one. For example: "For general medical expenses, the coverage is X. For medical expenses related to COVID-19, the coverage is Y."
+5.  **Synthesize Carefully**: Formulate your answer using only the information from the precisely matched context. Do not mix information from different benefits.
+6.  **WhatsApp Formatting**: Format the response for easy reading on WhatsApp using short bullet points (•) and bolding (*text*) for key terms.
 
 """),
                 HumanMessage(content=f"CONTEXT:\n{context_str}\n\nQUERY:\n{query}\n\nBased on the context and my critical instructions, please provide a detailed and accurate answer to the query.")
