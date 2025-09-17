@@ -271,6 +271,27 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
             update_session(session_id, user_message, agent_response)
             return agent_response
 
+        # ** GLOBAL RESET COMMAND **
+        # If the user sends a standalone "hi" or "hello", reset the entire conversation.
+        if user_message.strip().lower() in ["hi", "hello"]:
+            logger.warning(f"Global reset triggered for session {session_id} by user.")
+            # Clear the session state completely in MongoDB
+            conversations_collection.update_one(
+                {"session_id": session_id},
+                {"$set": {
+                    "stage": "initial",
+                    "collected_info": {},
+                    "conversation_context": {},
+                    "history": []
+                }},
+                upsert=True # Ensure a session document exists even if this is the very first message
+            )
+            # Get the initial welcome message
+            agent_response = get_contextual_greeting()
+            # Update the now-cleared session with this first interaction
+            update_session(session_id, user_message, agent_response)
+            return agent_response
+
         chat_history = get_chat_history(session_id)
         stage = get_stage(session_id)
         session = get_session(session_id)
@@ -280,42 +301,46 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
 
         # Handle payment stage with enhanced error handling
         if stage == "payment":
-            try:
-                logger.info(f"Processing payment stage message for session {session_id}")
-                response_data = run_payment_agent(user_message, chat_history, session_id)
+            # --- UAT: PAYMENT FLOW DISABLED ---
+            agent_response = "The payment flow is currently disabled for UAT. In a live environment, this is where we would proceed with payment. For now, is there anything else I can help you with?"
+            logger.info("UAT: Bypassed payment flow.")
+            set_stage(session_id, "initial") # Reset stage to allow other interactions
+            # try:
+            #     logger.info(f"Processing payment stage message for session {session_id}")
+            #     response_data = run_payment_agent(user_message, chat_history, session_id)
                 
-                # Check if the payment agent has signaled a context switch
-                if response_data.get("requires_context_switch"):
-                    logger.warning(f"Payment agent signaled a context switch for session {session_id}. Resetting flow.")
+            #     # Check if the payment agent has signaled a context switch
+            #     if response_data.get("requires_context_switch"):
+            #         logger.warning(f"Payment agent signaled a context switch for session {session_id}. Resetting flow.")
                     
-                    # 1. Clear all collected info for a completely fresh start.
-                    conversations_collection.update_one(
-                        {"session_id": session_id},
-                        {"$set": {"collected_info": {}}}
-                    )
-                    logger.info(f"Cleared all collected_info for session {session_id} on context switch.")
+            #         # 1. Clear all collected info for a completely fresh start.
+            #         conversations_collection.update_one(
+            #             {"session_id": session_id},
+            #             {"$set": {"collected_info": {}}}
+            #         )
+            #         logger.info(f"Cleared all collected_info for session {session_id} on context switch.")
                     
-                    # 2. Reset the stage.
-                    set_stage(session_id, "initial")
+            #         # 2. Reset the stage.
+            #         set_stage(session_id, "initial")
                     
-                    # 3. Re-route the original message through the main orchestrator logic to handle the new intent.
-                    # We call orchestrate_chat again to restart the process cleanly.
-                    return orchestrate_chat(user_message, session_id)
+            #         # 3. Re-route the original message through the main orchestrator logic to handle the new intent.
+            #         # We call orchestrate_chat again to restart the process cleanly.
+            #         return orchestrate_chat(user_message, session_id)
 
-                if isinstance(response_data, dict):
-                    agent_response = response_data.get("output", "I'm processing your payment information. Please provide your details.")
-                else:
-                    agent_response = str(response_data)
+            #     if isinstance(response_data, dict):
+            #         agent_response = response_data.get("output", "I'm processing your payment information. Please provide your details.")
+            #     else:
+            #         agent_response = str(response_data)
                     
-                # Check if payment is complete and reset stage
-                if "payment gateway" in agent_response.lower() or "redirected" in agent_response.lower():
-                    set_stage(session_id, "initial")
-                    agent_response += "\n\nFeel free to ask me any other insurance questions! 😊"
+            #     # Check if payment is complete and reset stage
+            #     if "payment gateway" in agent_response.lower() or "redirected" in agent_response.lower():
+            #         set_stage(session_id, "initial")
+            #         agent_response += "\n\nFeel free to ask me any other insurance questions! 😊"
                     
-            except Exception as e:
-                logger.error(f"Payment agent error for session {session_id}: {str(e)}")
-                agent_response = "I'm experiencing a technical issue with payment processing. 😅 Please try again or contact our support team for assistance."
-                set_stage(session_id, "initial")  # Reset stage on error
+            # except Exception as e:
+            #     logger.error(f"Payment agent error for session {session_id}: {str(e)}")
+            #     agent_response = "I'm experiencing a technical issue with payment processing. 😅 Please try again or contact our support team for assistance."
+            #     set_stage(session_id, "initial")  # Reset stage on error
                 
         elif stage == "awaiting_product_for_rag":
             logger.info(f"🎯 STAGE HANDLER: Processing 'awaiting_product_for_rag' stage for session {session_id}")
@@ -405,10 +430,13 @@ Chat History:
                     # No product switch detected, proceed with routing based on recommendation stage intent.
                     if intent_result.intent == "purchase" and intent_result.confidence > 0.6:
                         logger.info(f"User wants to proceed to purchase for session {session_id}")
-                        set_stage(session_id, "payment")
-                        agent_response = run_payment_agent(user_message, chat_history, session_id)
-                        if isinstance(agent_response, dict):
-                            agent_response = agent_response.get("output", "Let me help you with the payment process! 💳")
+                        # --- UAT: PAYMENT FLOW DISABLED ---
+                        agent_response = "Thank you for confirming! The payment flow is currently disabled for UAT. In a live environment, we would now proceed with payment."
+                        set_stage(session_id, "initial") # Reset stage
+                        # set_stage(session_id, "payment")
+                        # agent_response = run_payment_agent(user_message, chat_history, session_id)
+                        # if isinstance(agent_response, dict):
+                        #     agent_response = agent_response.get("output", "Let me help you with the payment process! 💳")
                     
                     elif intent_result.intent == "plan_comparison" and intent_result.confidence > 0.6:
                         logger.info(f"User asking for plan comparison for session {session_id}")
@@ -622,17 +650,20 @@ def process_normal_intent(intent_result, user_message: str, chat_history: list, 
         }
 
         if intent == "payment_inquiry":
-            logger.info(f"Setting session {session_id} to payment stage")
-            set_stage(session_id, "payment")
-            try:
-                response_data = run_payment_agent(user_message, chat_history)
-                if isinstance(response_data, dict):
-                    return response_data.get("output", "Let me help you with the payment process! 💳")
-                else:
-                    return str(response_data)
-            except Exception as e:
-                logger.error(f"Payment agent initialization error: {str(e)}")
-                return handle_agent_failure(session_id, "payment_agent", str(e))
+            # --- UAT: PAYMENT FLOW DISABLED ---
+            logger.info("UAT: Bypassed payment inquiry flow.")
+            return "The payment flow is currently disabled for UAT. I can help you with other questions about Travel insurance if you'd like."
+            # logger.info(f"Setting session {session_id} to payment stage")
+            # set_stage(session_id, "payment")
+            # try:
+            #     response_data = run_payment_agent(user_message, chat_history)
+            #     if isinstance(response_data, dict):
+            #         return response_data.get("output", "Let me help you with the payment process! 💳")
+            #     else:
+            #         return str(response_data)
+            # except Exception as e:
+            #     logger.error(f"Payment agent initialization error: {str(e)}")
+            #     return handle_agent_failure(session_id, "payment_agent", str(e))
                 
         elif product in agent_map:
             try:

@@ -72,20 +72,17 @@ class RAGAgent:
             context_str = "\n---\n".join([obj.properties['content'] for obj in response.objects])
             
             prompt = [
-                SystemMessage(content=f"""You are a professional insurance assistant. Your task is to answer the user's query based on the provided context and format the response for WhatsApp.
+                SystemMessage(content=f"""You are a professional insurance assistant. Your task is to answer the user's query with extreme precision based ONLY on the provided context.
 
-FORMATTING RULES:
-1. Use short bullet points (•) instead of long paragraphs.
-2. Break information into digestible chunks.
-3. Use *bold* for important terms and amounts.
-4. Keep each line under 60 characters when possible.
-5. Group related information together.
-6. Remove unnecessary words while keeping all key details.
-7. Use a professional tone without excessive emojis.
-8. Format currency amounts clearly (e.g., *$150,000*).
-9. Use line breaks between different topics.
+CRITICAL INSTRUCTIONS:
+1.  **Analyze the User's Query First**: Before looking at the context, break down the user's query to identify the specific benefit, plan, and any special conditions (like 'child', 'COVID-19', or 'pre-existing conditions').
+2.  **Match Context Precisely**: Scan the provided CONTEXT for sections that exactly match the user's query. For example, if the user asks about "Overseas Medical Expenses", you must differentiate between the general benefit and more specific ones like "Overseas Medical Expenses due to COVID-19" or "Add-On... Pre-Existing Condition Overseas Medical Expenses".
+3.  **Prioritize Specificity**: Only use information from a specific section (like COVID-19 or Pre-Existing) if the user's query contains those exact keywords. Otherwise, you MUST use the general benefit information.
+4.  **Synthesize Carefully**: Formulate your answer using only the information from the precisely matched context. Do not mix information from different benefits.
+5.  **WhatsApp Formatting**: Format the response for easy reading on WhatsApp using short bullet points (•) and bolding (*text*) for key terms.
+
 """),
-                HumanMessage(content=f"CONTEXT:\n{context_str}\n\nQUERY:\n{query}\n\nBased on the context, please provide a detailed and accurate answer to the query, following all formatting rules.")
+                HumanMessage(content=f"CONTEXT:\n{context_str}\n\nQUERY:\n{query}\n\nBased on the context and my critical instructions, please provide a detailed and accurate answer to the query.")
             ]
 
             llm_response = llm.invoke(prompt)
