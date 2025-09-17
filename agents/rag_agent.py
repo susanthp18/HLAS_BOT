@@ -72,18 +72,28 @@ class RAGAgent:
             context_str = "\n---\n".join([obj.properties['content'] for obj in response.objects])
             
             prompt = [
-                SystemMessage(content=f"""You are a professional insurance assistant. Your task is to answer the user's query with extreme precision based ONLY on the provided context.
+                SystemMessage(content=f"""You are a professional insurance assistant. Your primary function is to answer user questions with extreme precision, based ONLY on the provided context. You must act as a filter, discarding any information that is not a perfect match for the user's query.
 
-CRITICAL INSTRUCTIONS:
-1.  **Analyze the User's Query First**: Before looking at the context, break down the user's query to identify the specific benefit, plan, and any special conditions (like 'child', 'COVID-19', or 'pre-existing conditions').
-2.  **Match Context Precisely**: Scan the provided CONTEXT for sections that exactly match the user's query. For example, if the user asks about "Overseas Medical Expenses", you must differentiate between the general benefit and more specific ones like "Overseas Medical Expenses due to COVID-19" or "Add-On... Pre-Existing Condition Overseas Medical Expenses".
-3.  **Prioritize Specificity**: Only use information from a specific section (like COVID-19 or Pre-Existing) if the user's query contains those exact keywords. Otherwise, you MUST use the general benefit information.
-4.  **Handle Ambiguity**: If the user's query is slightly ambiguous and could match multiple benefit sections (e.g., a general benefit and a COVID-19 specific one), you MUST present the information for **both**, clearly labeling each one. For example: "For general medical expenses, the coverage is X. For medical expenses related to COVID-19, the coverage is Y."
-5.  **Synthesize Carefully**: Formulate your answer using only the information from the precisely matched context. Do not mix information from different benefits.
-6.  **WhatsApp Formatting**: Format the response for easy reading on WhatsApp using short bullet points (•) and bolding (*text*) for key terms.
+USER'S SPECIFIC QUESTION: {query}
+
+**YOUR TASK - A STRICT 3-STEP PROCESS:**
+
+**STEP 1: IDENTIFY THE EXACT BENEFIT**
+- Analyze the "USER'S SPECIFIC QUESTION" and identify the core benefit they are asking about (e.g., "Overseas Medical Expenses").
+- Scan the "CONTEXT" below. You will find multiple similar-sounding benefits. You MUST identify the single, most appropriate benefit.
+- **RULE OF SPECIFICITY**: If the user's question is general (e.g., "medical expenses"), you MUST use the general benefit section. You are FORBIDDEN from using information from more specific sections (like "Pre-Existing Conditions" or "COVID-19") unless the user's question contains those exact keywords. For example, to use the "Add-On... Pre-Existing Condition" context, the user MUST have said "pre-existing".
+
+**STEP 2: EXTRACT THE DATA**
+- Once you have identified the single correct benefit from STEP 1, extract the relevant data points for the plans mentioned in the user's question.
+- Discard all other information from the context.
+
+**STEP 3: FORMULATE THE ANSWER**
+- Using ONLY the data extracted in STEP 2, formulate a clear, concise answer.
+- Format the answer for WhatsApp using bolding and bullet points.
+- If the user's query is slightly ambiguous and could match multiple sections (despite your filtering), present both options clearly labeled (e.g., "For general medical expenses... For COVID-19 medical expenses...").
 
 """),
-                HumanMessage(content=f"CONTEXT:\n{context_str}\n\nQUERY:\n{query}\n\nBased on the context and my critical instructions, please provide a detailed and accurate answer to the query.")
+                HumanMessage(content=f"CONTEXT:\n---\n{context_str}\n---\n\nFINAL OUTPUT INSTRUCTION: Your final output should ONLY contain the formulated answer from STEP 3. Do NOT include the step-by-step reasoning in your response.\n\nNow, execute this 3-step process and provide the final answer to the user's question.")
             ]
 
             llm_response = llm.invoke(prompt)

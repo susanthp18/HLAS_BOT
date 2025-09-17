@@ -210,22 +210,28 @@ def generate_plan_comparison_table(product: str, requested_tiers: list, user_que
         available_tiers = get_available_tiers(product)
 
         # 4. Create an enhanced prompt for the LLM
-        system_prompt = f"""You are an expert insurance assistant. Your task is to create a detailed and accurate comparison of insurance plan tiers, formatted for easy reading on WhatsApp.
+        system_prompt = f"""You are an expert insurance assistant. Your primary function is to create an accurate comparison, based ONLY on the provided context. You must act as a filter, discarding any information that is not a perfect match for the user's query.
 
-PRODUCT: {product} Insurance
-ALL AVAILABLE TIERS: {', '.join(available_tiers)}
-USER IS INTERESTED IN: {', '.join(requested_tiers) if requested_tiers else 'all tiers'}
 USER'S SPECIFIC QUESTION: {user_query}
+USER IS INTERESTED IN: {', '.join(requested_tiers) if requested_tiers else 'all tiers'}
 
-CRITICAL INSTRUCTIONS:
-1.  **Analyze the User's Query First**: Before looking at the context, break down the user's query to identify the specific benefit, plan, and any special conditions (like 'child', 'COVID-19', or 'pre-existing conditions').
-2.  **Match Context Precisely**: Scan the provided 'BENEFITS INFORMATION' for sections that exactly match the user's query. For example, if the user asks about "Overseas Medical Expenses", you must differentiate between the general benefit and more specific ones like "Overseas Medical Expenses due to COVID-19" or "Add-On... Pre-Existing Condition Overseas Medical Expenses".
-3.  **Prioritize Specificity**: Only use information from a specific section (like COVID-19 or Pre-Existing) if the user's query contains those exact keywords. Otherwise, you MUST use the general benefit information.
-4.  **Handle Ambiguity**: If the user's query is slightly ambiguous and could match multiple benefit sections (e.g., a general benefit and a COVID-19 specific one), you MUST present the information for **both** in your comparison, clearly labeling each one (e.g., "• General Medical Expenses: $X", "• COVID-19 Medical Expenses: $Y").
-5.  **Create a Focused Comparison**: For each of the tiers the user is interested in, create a separate section starting with the plan name in bold (e.g., *Gold Plan*).
-6.  **List Relevant Benefits**: Under each plan name, list the key benefits using bullet points (•). If the user asked about a specific benefit, that MUST be the first bullet point.
-7.  **Add a Final Summary**: After the details, add a "SUMMARY" section. This should be a short, 2-3 sentence comparison of the key differences, focusing on the topic of the user's specific question.
-8.  **Accuracy is Key**: Ensure all information is accurate and based *only* on the provided context. Do not use markdown tables.
+**YOUR TASK - A STRICT 3-STEP PROCESS:**
+
+**STEP 1: IDENTIFY THE EXACT BENEFIT(S)**
+- Analyze the "USER'S SPECIFIC QUESTION". If it's a general comparison, consider all benefits. If it's specific (e.g., "overseas medical expenses"), focus only on that.
+- Scan the "BENEFITS INFORMATION" below. You may find multiple similar-sounding benefits.
+- **RULE OF SPECIFICITY**: If the user's question is general, you MUST use the general benefit sections. You are FORBIDDEN from using information from more specific sections (like "Pre-Existing Conditions" or "COVID-19") unless the user's question contains those exact keywords.
+
+**STEP 2: EXTRACT THE DATA**
+- Once you have identified the correct benefit(s) from STEP 1, extract the relevant data points for the plans the user is interested in.
+- Discard all other information from the context.
+
+**STEP 3: FORMULATE THE COMPARISON**
+- Using ONLY the data extracted in STEP 2, create a clear, WhatsApp-friendly comparison.
+- Use bold headings for each plan and bullet points for benefits.
+- Add a "SUMMARY" at the end to highlight the key differences based on the user's specific question.
+- If the user's query was ambiguous and could match multiple sections, present the data for **both**, clearly labeled.
+
 """
 
         human_prompt = f"""BENEFITS INFORMATION:
@@ -233,7 +239,9 @@ CRITICAL INSTRUCTIONS:
 {context_str}
 ---
 
-Now, please generate the WhatsApp-friendly comparison and summary based on the critical instructions.
+FINAL OUTPUT INSTRUCTION: Your final output should ONLY contain the formulated comparison and summary from STEP 3. Do NOT include the step-by-step reasoning in your response.
+
+Now, execute this 3-step process and provide the final comparison and summary.
 """
         prompt = [
             SystemMessage(content=system_prompt),
