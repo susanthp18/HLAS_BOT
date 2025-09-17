@@ -60,7 +60,7 @@ def run_travel_agent(user_message: str, chat_history: list, session_id: str):
     
     # Define the required information
     required_info = ['destination', 'travel_duration_days', 'pre_existing_medical_conditions', 'budget_preference']
-
+    
     chain = llm.with_structured_output(TravelInfo, method="function_calling")
     
     prompt = [
@@ -156,12 +156,12 @@ Current collected information: {travel_info}
         # Call the recommendation agent
         from .recommendation_agent import get_recommendation
         recommendation = get_recommendation(session_id, "TRAVEL")
-        
+            
         # Store the recommended plan in the session context for future reference
         from app.session_manager import update_conversation_context
         if recommendation and recommendation.get('plan') != 'not available':
             update_conversation_context(session_id, recommended_plan=recommendation.get('plan'))
-
+            
         # Generate the recommendation message
         from .rec_retriever_agent import get_recommendation_message
         try:

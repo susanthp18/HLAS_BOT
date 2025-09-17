@@ -16,7 +16,7 @@ from langchain.schema.messages import HumanMessage, AIMessage, SystemMessage
 from app.config import llm
 from pydantic import BaseModel, Field
 from typing import List
-from .rec_retriever_agent import get_available_tiers, generate_plan_comparison_table
+from .rec_retriever_agent import get_available_tiers, generate_plan_comparison_table, generate_plan_summary
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def handle_unknown_product_intelligently(user_message: str, chat_history: list, 
 
 But first, let me recommend the perfect insurance plan for you. Which type are you interested in?
 
-🌍 **Travel Insurance** - for your trips and vacations
+🌍 **Travel Insurance** - for your trips and vacations  
 """
 # 🏠 **Maid Insurance** - for your domestic helper
 # 
@@ -291,7 +291,7 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
             # Update the now-cleared session with this first interaction
             update_session(session_id, user_message, agent_response)
             return agent_response
-
+        
         chat_history = get_chat_history(session_id)
         stage = get_stage(session_id)
         session = get_session(session_id)
@@ -352,8 +352,17 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
                 pending_question = conversation_context.get("pending_rag_question")
                 if pending_question:
                     logger.info(f"Product '{product_intent.product.value}' identified. Answering pending question: '{pending_question}'")
-                    from .rag_agent import get_rag_response
-                    agent_response = get_rag_response(pending_question, chat_history, product_intent.product.value)
+                    # Detect if the pending question is a plan tier comparison. If so, generate a full comparison.
+                    product_str = product_intent.product.value
+                    comparison_keywords = ["compare", "comparison", "vs", "versus", "difference", "different plans", "which is better"]
+                    requested_tiers = extract_comparison_tiers(pending_question, product_str, chat_history, session_id)
+
+                    if (len(requested_tiers) >= 2) or any(kw in pending_question.lower() for kw in comparison_keywords):
+                        logger.info("Detected plan comparison while resolving pending question. Generating full comparison across general benefits.")
+                        agent_response = generate_plan_comparison_table(product_str, requested_tiers, pending_question)
+                    else:
+                        from .rag_agent import get_rag_response
+                        agent_response = get_rag_response(pending_question, chat_history, product_str)
                     
                     # Reset stage and clear pending question
                     set_stage(session_id, "initial")
@@ -437,7 +446,7 @@ Chat History:
                         # agent_response = run_payment_agent(user_message, chat_history, session_id)
                         # if isinstance(agent_response, dict):
                         #     agent_response = agent_response.get("output", "Let me help you with the payment process! 💳")
-                    
+                
                     elif intent_result.intent == "plan_comparison" and intent_result.confidence > 0.6:
                         logger.info(f"User asking for plan comparison for session {session_id}")
                         
@@ -478,11 +487,21 @@ Chat History:
                     
                     else:  # This now primarily handles 'policy_question'
                         logger.info(f"User asking policy question about {current_product} for session {session_id}")
-                        from .rag_agent import get_rag_response
                         # Convert product enum to string for collection lookup
                         product_str = current_product.value if hasattr(current_product, 'value') else str(current_product)
-                        agent_response = get_rag_response(user_message, chat_history, product_str)
-                        agent_response += "\n\nDo you have any other questions about the coverage, or would you like to proceed with purchasing this plan?"
+                        # Detect single-plan summary vs generic RAG
+                        summary_keywords = [
+                            "explain", "summary", "summarize", "summarise", "overview", "outline", "describe", "breakdown",
+                            "in detail", "details", "full details", "benefits of", "what's in", "what is in"
+                        ]
+                        requested_tiers = extract_comparison_tiers(user_message, product_str, chat_history, session_id)
+                        if len(requested_tiers) == 1 and any(kw in user_message.lower() for kw in summary_keywords):
+                            logger.info("Detected single-plan summary request in recommendation stage. Generating plan summary.")
+                            agent_response = generate_plan_summary(product_str, requested_tiers[0])
+                        else:
+                            from .rag_agent import get_rag_response
+                            agent_response = get_rag_response(user_message, chat_history, product_str)
+                            agent_response += "\n\nDo you have any other questions about the coverage, or would you like to proceed with purchasing this plan?"
                     
             except Exception as e:
                 logger.error(f"Recommendation stage error for session {session_id}: {str(e)}")
@@ -497,7 +516,7 @@ Chat History:
                 agent_response = response_data.get("output", "I'm processing your travel details. One moment please.")
             else:
                 agent_response = str(response_data)
-
+                
         else:
             # *** ROBUST LLM-POWERED CONVERSATION FLOW ROUTING ***
             # Use intelligent conversation flow analysis
@@ -518,7 +537,7 @@ Chat History:
                 current_session = get_session(session_id)
                 context = current_session.get("conversation_context", {})
                 current_product = context.get("primary_product")
-
+                
                 if current_product and current_product != Product.UNKNOWN:
                     # If product context exists, override the classification to maintain context.
                     logger.info(f"Maintaining product context: {current_product}. Using new intent: {intent_result.intent}")
@@ -527,7 +546,7 @@ Chat History:
                     # No existing product context, so we trust the new classification.
                     logger.info(f"No prior product context. Using new classification: {intent_result.product}")
                     update_conversation_context(session_id, primary_product=intent_result.product)
-
+                
                 product = intent_result.product
                 intent = intent_result.intent
                 
@@ -576,10 +595,26 @@ Chat History:
                 
                 # Check if product is specified
                 if hasattr(intent_result, 'product') and intent_result.product != Product.UNKNOWN:
-                    # Product specified - route to RAG with specific product
-                    logger.info(f"Routing informational question to RAG agent for {intent_result.product.value} product")
-                    from .rag_agent import get_rag_response
-                    agent_response = get_rag_response(user_message, chat_history, intent_result.product.value)
+                    # Product specified - choose between plan comparison and RAG
+                    product_str = intent_result.product.value
+                    comparison_keywords = ["compare", "comparison", "vs", "versus", "difference", "different plans", "which is better"]
+                    requested_tiers = extract_comparison_tiers(user_message, product_str, chat_history, session_id)
+
+                    if (len(requested_tiers) >= 2) or any(kw in user_message.lower() for kw in comparison_keywords):
+                        logger.info("Detected plan comparison in main handler. Generating full comparison for requested tiers.")
+                        agent_response = generate_plan_comparison_table(product_str, requested_tiers, user_message)
+                        agent_response += "\n\nWould you like to proceed with one of these plans or see a different comparison?"
+                    elif len(requested_tiers) == 1 and any(word in user_message.lower() for word in [
+                        "explain", "summary", "summarize", "summarise", "overview", "outline", "describe", "breakdown",
+                        "in detail", "details", "full details", "what's in", "what is in", "what does", "benefits of"
+                    ]):
+                        # Single plan summary request
+                        logger.info("Detected single-plan summary request. Generating plan summary for the requested tier.")
+                        agent_response = generate_plan_summary(product_str, requested_tiers[0])
+                    else:
+                        logger.info(f"Routing informational question to RAG agent for {product_str} product")
+                        from .rag_agent import get_rag_response
+                        agent_response = get_rag_response(user_message, chat_history, product_str)
                 else:
                     # Product not specified - set stage and ask user to choose
                     logger.info(f"🎯 MAIN HANDLER: Informational question without product - setting stage to 'awaiting_product_for_rag'")
@@ -695,3 +730,4 @@ def process_normal_intent(intent_result, user_message: str, chat_history: list, 
     except Exception as e:
         logger.error(f"Error in process_normal_intent: {str(e)}")
         return get_fallback_response("general_error", session_id)
+

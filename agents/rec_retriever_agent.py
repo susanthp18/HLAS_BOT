@@ -215,23 +215,51 @@ def generate_plan_comparison_table(product: str, requested_tiers: list, user_que
 USER'S SPECIFIC QUESTION: {user_query}
 USER IS INTERESTED IN: {', '.join(requested_tiers) if requested_tiers else 'all tiers'}
 
+GENERAL RULES:
+- Normalize plan spelling: if the context uses 'Platinium', label it as 'Platinum' in the output.
+- Do NOT include specialized sections (COVID-19, Pre-Existing Conditions/Add-Ons) unless the user's question explicitly mentions them.
+- Preserve exact vocabulary for amounts: 'Unlimited', 'Not available', currency symbols, and caps (e.g., 'capped at S$100 per visit').
+- Age categories appear in the context and must be respected when relevant:
+  - Adult (age 70 years and below)
+  - Adult (age above 70 years)
+  - Child
+
 **YOUR TASK - A STRICT 3-STEP PROCESS:**
 
 **STEP 1: IDENTIFY THE EXACT BENEFIT(S)**
-- Analyze the "USER'S SPECIFIC QUESTION". If it's a general comparison, consider all benefits. If it's specific (e.g., "overseas medical expenses"), focus only on that.
-- Scan the "BENEFITS INFORMATION" below. You may find multiple similar-sounding benefits.
-- **RULE OF SPECIFICITY**: If the user's question is general, you MUST use the general benefit sections. You are FORBIDDEN from using information from more specific sections (like "Pre-Existing Conditions" or "COVID-19") unless the user's question contains those exact keywords.
+- Analyze the user's question. If it's a general comparison (no specific benefit mentioned), you MUST compare ALL general benefits found in the context for the requested tiers.
+- If the question targets a specific benefit (e.g., 'Overseas Medical Expenses'), focus only on that benefit family and DO NOT list other benefits.
+- **RULE OF SPECIFICITY**: Use the general benefit sections unless the user's question explicitly mentions a specialized section.
+- **DISAMBIGUATE 'MEDICAL EXPENSES'**: If the user says 'Medical Expenses' without qualifiers, include BOTH 'Overseas Medical Expenses' and 'Medical Expenses in Singapore' (with the S$100 per-visit cap when applicable).
+
+ BENEFIT FILTERING LOGIC (CRITICAL):
+ - Derive an ALLOWED_BENEFITS whitelist from the user's question using exact or synonymous phrases:
+   - 'emergency medical evacuation', 'evacuation', 'med evac' → Emergency Medical Evacuation
+   - 'medical expenses' (generic) → Overseas Medical Expenses AND Medical Expenses in Singapore
+   - 'overseas medical expenses' → Overseas Medical Expenses
+   - 'medical expenses in singapore', 'singapore medical expenses' → Medical Expenses in Singapore
+   - 'repatriation' → Repatriation of Mortal Remains
+ - If one or more specific benefits are implied, ALLOWED_BENEFITS must contain ONLY those families; compare ONLY those.
+ - If the question mentions no benefit, set ALLOWED_BENEFITS = ALL and compare all general benefits.
 
 **STEP 2: EXTRACT THE DATA**
-- Once you have identified the correct benefit(s) from STEP 1, extract the relevant data points for the plans the user is interested in.
-- Discard all other information from the context.
+- Restrict output to ONLY the requested tiers (if none specified, include all tiers).
+- For each benefit you include, extract the exact amounts for the requested tiers from the context. If a value is not present for a tier, state 'Not available'.
+- For age-based benefits, show values per age group (Adult ≤70, Adult >70, Child). If age not specified by user, present all age categories that exist in context.
 
 **STEP 3: FORMULATE THE COMPARISON**
-- Using ONLY the data extracted in STEP 2, create a clear, WhatsApp-friendly comparison.
-- Use bold headings for each plan and bullet points for benefits.
-- Add a "SUMMARY" at the end to highlight the key differences based on the user's specific question.
-- If the user's query was ambiguous and could match multiple sections, present the data for **both**, clearly labeled.
-
+- Create a clear, WhatsApp-friendly comparison.
+- If the user asked for a general comparison, structure by CATEGORIES and then benefits:
+  1) **Medical And Other Expenses** (include all listed sub-benefits such as Overseas Medical Expenses, Medical Expenses in Singapore, Compassionate Visit, Repatriation of Mortal Remains, Overseas Funeral Expenses, Return of Minor Children, Emergency Medical Evacuation, Overseas Hospital Cash Benefit, Hospital Cash Benefit in Singapore)
+  2) **Personal Accident**
+  3) **Travel Inconvenience**
+  4) **Liability**
+  5) **Lifestyle**
+- If the user asked for a specific benefit, limit output strictly to that benefit family.
+- Under each benefit, list ONLY the requested tiers with amounts (by age group when relevant). Do NOT omit benefits when the query is general.
+ - HARD CONSTRAINT: If ALLOWED_BENEFITS is not ALL, DO NOT include any benefit outside that whitelist. Do not add extra sections.
+- Add a short SUMMARY at the end highlighting key differences tied to the user's question.
+- Keep formatting concise with bold headings and bullet points. Avoid tables.
 """
 
         human_prompt = f"""BENEFITS INFORMATION:
@@ -239,7 +267,13 @@ USER IS INTERESTED IN: {', '.join(requested_tiers) if requested_tiers else 'all 
 {context_str}
 ---
 
-FINAL OUTPUT INSTRUCTION: Your final output should ONLY contain the formulated comparison and summary from STEP 3. Do NOT include the step-by-step reasoning in your response.
+FINAL OUTPUT INSTRUCTION:
+- If the user did NOT specify a particular benefit, you MUST provide an exhaustive comparison covering ALL general benefits for the requested tiers, organized by the category order above. Do NOT skip any benefit present in the context.
+- If the user specified a particular benefit (e.g., 'Overseas Medical Expenses'), output ONLY that benefit family and nothing else.
+- Output ONLY the final comparison and summary; do NOT include any intermediate reasoning.
+
+USER QUESTION (use this to build ALLOWED_BENEFITS):
+{user_query}
 
 Now, execute this 3-step process and provide the final comparison and summary.
 """
@@ -256,3 +290,85 @@ Now, execute this 3-step process and provide the final comparison and summary.
     except Exception as e:
         logger.error(f"Failed to generate plan comparison table: {e}")
         return "I'm sorry, I encountered an error while trying to create the plan comparison. Please try again later."
+
+
+def generate_plan_summary(product: str, plan_tier: str):
+    """
+    Generates a comprehensive, WhatsApp-friendly summary of a SINGLE plan tier
+    across ALL general benefits (excluding COVID-19 and Pre-Existing Add-Ons unless explicitly asked).
+    """
+    logger.info(f"Generating plan summary for {product} - tier '{plan_tier}'")
+
+    try:
+        # Fetch ALL benefit chunks for the product
+        client = get_weaviate_client()
+        collection = client.collections.get("Insurance_Knowledge_Base")
+
+        response = collection.query.fetch_objects(
+            filters=Filter.all_of([
+                Filter.by_property("product_name").equal(product),
+                Filter.by_property("doc_type").equal("benefits")
+            ]),
+            limit=100
+        )
+
+        if not response.objects:
+            logger.warning(f"No benefit documents found for product: {product}")
+            return f"I couldn't find any benefit information for the {product} {plan_tier} plan. Please check if the documents have been embedded correctly."
+
+        # Combine chunks into a single context string
+        context_str = "\n---\n".join([obj.properties['content'] for obj in response.objects])
+        logger.info(f"Combined {len(response.objects)} benefit chunks into a single context for summary.")
+
+        # Normalize plan tier label (handle common misspelling)
+        normalized_tier = "Platinum" if plan_tier.strip().lower() in ["platinum", "platinium"] else plan_tier.strip().title()
+
+        system_prompt = f"""You are an expert insurance assistant. Your task is to produce a complete, accurate summary of a SINGLE plan tier's benefits using ONLY the provided context.
+
+GENERAL RULES:
+- Plan tier to summarize: {normalized_tier}
+- Normalize spelling in output: use 'Platinum' (not 'Platinium').
+- Exclude specialized sections (COVID-19, Pre-Existing/Add-Ons) unless explicitly requested (not requested here).
+- Preserve exact vocabulary for amounts: 'Unlimited', 'Not available', currency symbols, and caps (e.g., 'capped at S$100 per visit').
+- Respect age categories where present: Adult (≤70), Adult (>70), Child. If multiple categories exist, present them clearly.
+
+STRICT PROCESS:
+1) Identify ONLY the general benefit sections applicable to all travelers (not COVID/add-ons).
+2) Extract the exact amounts for the {normalized_tier} plan for each benefit.
+3) Produce a WhatsApp-friendly summary with bold section headings and bullet points. Avoid tables.
+
+STRUCTURE:
+- **Medical And Other Expenses**
+  - Include sub-benefits: Overseas Medical Expenses, Medical Expenses in Singapore (note S$100 per-visit cap where applicable), Compassionate Visit, Repatriation of Mortal Remains, Overseas Funeral Expenses, Return of Minor Children, Emergency Medical Evacuation, Overseas Hospital Cash Benefit, Hospital Cash Benefit in Singapore
+- **Personal Accident**
+- **Travel Inconvenience**
+- **Liability**
+- **Lifestyle**
+
+OUTPUT:
+- Show values for the {normalized_tier} plan only.
+- For age-based items, list the categories with amounts.
+- End with a short 2–3 sentence summary.
+"""
+
+        human_prompt = f"""BENEFITS INFORMATION:
+---
+{context_str}
+---
+
+FINAL OUTPUT INSTRUCTION:
+- Output ONLY the formatted summary for the {normalized_tier} plan and the short summary; do NOT include any intermediate reasoning.
+"""
+
+        prompt = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_prompt),
+        ]
+
+        result = llm.invoke(prompt)
+        logger.info("Successfully generated single plan summary text.")
+        return result.content
+
+    except Exception as e:
+        logger.error(f"Failed to generate plan summary: {e}")
+        return "I'm sorry, I encountered an error while creating the plan summary. Please try again later."
