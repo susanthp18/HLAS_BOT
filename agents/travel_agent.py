@@ -73,7 +73,7 @@ def run_travel_agent(user_message: str, chat_history: list, session_id: str):
 
 CRITICAL INTERPRETATION: You must interpret common colloquialisms. For example, 'nope', 'nah', 'not really' should be extracted as 'no'. 'yep', 'sure', 'i do' should be extracted as 'yes'.
 
-AMBIGUITY HANDLING: Prioritize extracting a value if one is present, even if the user expresses uncertainty (e.g., for 'maybe 600 days', extract 600). Only set the `is_ambiguous` flag to `true` if the user provides a pure non-answer with no extractable data (e.g., 'I don't know', 'not sure').
+AMBIGUITY HANDLING: Prioritize extracting a value if one is present. If the user provides a number for `travel_duration_days` that is outside the valid range (1-364), you MUST still extract that number and allow the system to validate it. Only set the `is_ambiguous` flag to `true` if the user provides a pure non-answer with no extractable data (e.g., 'I don't know', 'not sure').
 
 Ask one question at a time. Be conversational. Once all information is collected, confirm with the user and tell them you will now find a recommendation.
 
@@ -193,19 +193,27 @@ Current collected information: {travel_info}
                 "stage": "recommendation"
             }
 
-    # If info is missing, ask the next question
+    # If info is missing, ask the next question intelligently
     else:
-        next_question = {
-            'destination': "Great! Where will you be traveling to? 🌍",
-            'travel_duration_days': "How many days will you be traveling for?",
-            'pre_existing_medical_conditions': "Do you have any pre-existing medical conditions? (yes/no)",
-            'budget_preference': "Are you looking for a budget-friendly plan or a more comprehensive one?"
-        }
-        
-        # Find the first missing item and ask the corresponding question
-        question_to_ask = next_question.get(missing_info[0], "I need a little more information, but I'm not sure what to ask. Could you tell me more about your trip?")
-        
+        question_to_ask = get_next_question(travel_info, required_info)
         return {
             "output": question_to_ask,
             "stage": "travel_inquiry"
         }
+
+def get_next_question(collected_info: dict, required_info: list) -> str:
+    """
+    Determines the next question to ask based on what information is still missing.
+    """
+    for key in required_info:
+        if key not in collected_info:
+            question_map = {
+                'destination': "Great! Where will you be traveling to? 🌍",
+                'travel_duration_days': "How many days will you be traveling for?",
+                'pre_existing_medical_conditions': "Do you have any pre-existing medical conditions? (yes/no)",
+                'budget_preference': "Are you looking for a budget-friendly plan or a more comprehensive one?"
+            }
+            return question_map[key]
+    
+    # This should theoretically not be reached if called correctly
+    return "I think I have all the information I need. I will now find a recommendation for you."
