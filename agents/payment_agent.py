@@ -15,8 +15,9 @@ class PaymentStage(BaseModel):
     """Model for payment stage analysis."""
     stage: str = Field(..., description="Current payment stage: 'plan_confirmation', 'collecting_details', 'processing_payment', 'completed'")
     user_intent: str = Field(..., description="User's intent: 'confirm_plan', 'provide_details', 'cancel', 'question'")
-    extracted_name: Optional[str] = Field(None, description="Extracted full name if provided")
-    extracted_email: Optional[str] = Field(None, description="Extracted email if provided")
+    extracted_name: str = Field(default="", description="Extracted full name if provided. Default to empty string if not present.")
+    extracted_email: str = Field(default="", description="Extracted email if provided. Default to empty string if not present.")
+    requires_context_switch: bool = Field(default=False, description="Set to true if the user mentions a different insurance product, indicating a need to switch context.")
     confidence: float = Field(..., description="Confidence in analysis (0.0 to 1.0)")
     response: str = Field(..., description="Response to user")
 
@@ -91,36 +92,34 @@ CONTEXT:
 - Current payment info collected: {payment_info}
 - Chat history: {chat_history[-4:] if len(chat_history) > 4 else chat_history}
 
-PAYMENT STAGES:
-1. 'plan_confirmation' - User needs to confirm they want to purchase the recommended plan
-2. 'collecting_details' - Collecting name and email for payment processing  
-3. 'processing_payment' - Ready to process payment with all details
-4. 'completed' - Payment process completed
+Your primary goal is to analyze the user's message and respond with a JSON object that strictly adheres to the following schema.
 
-USER INTENTS:
-- 'confirm_plan' - User confirms they want to buy the plan
-- 'provide_details' - User is providing name/email details
-- 'cancel' - User wants to cancel or go back
-- 'question' - User has questions about the plan/payment
-
-VALIDATION RULES:
-- Name: Must be at least 2 characters, only letters, spaces, hyphens, apostrophes
-- Email: Must be valid email format (user@domain.com)
+JSON SCHEMA:
+{{
+    "stage": "string <'plan_confirmation'|'collecting_details'|'processing_payment'|'completed'>",
+    "user_intent": "string <'confirm_plan'|'provide_details'|'cancel'|'question'>",
+    "extracted_name": "string",
+    "extracted_email": "string",
+    "requires_context_switch": "boolean",
+    "confidence": "float <0.0-1.0>",
+    "response": "string <Your conversational response to the user>"
+}}
 
 INSTRUCTIONS:
-1. Analyze the user's message in the context of the payment flow.
-2. Determine the current `stage`, the `user_intent`, and your `confidence` level (as a number between 0.0 and 1.0).
-3. Formulate a `response` to the user based on the current stage and their intent.
-4. If the user provides their name or email, extract it into `extracted_name` or `extracted_email`.
-5. **IMPORTANT**: If the user's message is a denial (e.g., "no"), a question, or mentions a different product, do NOT extract any details. Set the intent to 'cancel' or 'question' accordingly.
-6. Your final output must be a JSON object containing all required fields: `stage`, `user_intent`, `confidence` (as float), and `response`.
-
-IMPORTANT: `confidence` must be a number between 0.0 and 1.0 (e.g., 0.95, 0.8, 0.7), NOT a word like 'high' or 'low'.
+1. Analyze the user's message to determine the `stage` and `user_intent`.
+2. **CRITICAL EXTRACTION**: If the user provides a name or email, you MUST populate the `extracted_name` or `extracted_email` fields in the JSON. This is the most important instruction.
+   - Example: If message is "my name is John Doe", set "extracted_name": "John Doe".
+   - Example: If message is "john.doe@email.com", set "extracted_email": "john.doe@email.com".
+3. **CONTEXT SWITCH**: If the user's message mentions a different insurance product (e.g., 'maid insurance' when the current product is TRAVEL), you MUST set `requires_context_switch` to `true`.
+4. If the user's message is a denial or a simple question, do NOT extract details and set the intent to 'cancel' or 'question'.
+5. Formulate a conversational `response` to the user.
+6. `confidence` MUST be a number between 0.0 and 1.0.
 """),
                 HumanMessage(content=f"User message: {user_message}")
             ]
             
             result = payment_chain.invoke(prompt)
+            logger.info(f"Full payment agent LLM result: {result.model_dump()}")
             
             # Fallback: Fix confidence if it's not a valid float
             if not isinstance(result.confidence, (int, float)) or not (0.0 <= result.confidence <= 1.0):
@@ -128,6 +127,16 @@ IMPORTANT: `confidence` must be a number between 0.0 and 1.0 (e.g., 0.95, 0.8, 0
                 result.confidence = 0.8
             
             logger.info(f"Payment stage analysis: {result.stage}, Intent: {result.user_intent}, Confidence: {result.confidence}")
+
+            # ==> PRIORITY CHECK <==
+            # Immediately return if the LLM detected a context switch, so the orchestrator can handle it.
+            if result.requires_context_switch:
+                logger.warning(f"LLM detected a context switch in payment agent. Returning to orchestrator for re-routing.")
+                return {
+                    "output": result.response,
+                    "stage": result.stage,
+                    "requires_context_switch": True
+                }
             
         except Exception as e:
             logger.error(f"Error in payment LLM analysis: {str(e)}")
@@ -158,6 +167,7 @@ IMPORTANT: `confidence` must be a number between 0.0 and 1.0 (e.g., 0.95, 0.8, 0
                     payment_info["name"] = result.extracted_name.strip()
                     logger.info(f"Valid name collected: {result.extracted_name}")
                 else:
+                    logger.warning(f"Invalid name format received: '{result.extracted_name}'")
                     return {
                         "output": "*Invalid name format*\n\nRequired:\n• At least 2 characters\n• Letters only\n\nExample: John Smith",
                         "stage": "collecting_details"
@@ -168,27 +178,31 @@ IMPORTANT: `confidence` must be a number between 0.0 and 1.0 (e.g., 0.95, 0.8, 0
                     payment_info["email"] = result.extracted_email.lower().strip()
                     logger.info(f"Valid email collected: {result.extracted_email}")
                 else:
+                    logger.warning(f"Invalid email format received: '{result.extracted_email}'")
                     return {
                         "output": "*Invalid email format*\n\nExample: john.smith@email.com",
                         "stage": "collecting_details"
                     }
             
-            # Save updated payment info (temporarily for conversation flow, not permanent storage)
-            collected_info["payment_info"] = payment_info  # Keep for conversation flow
-            set_collected_info(session_id, "payment_info", payment_info)  # Keep for conversation flow
+            # Save updated payment info
+            set_collected_info(session_id, "payment_info", payment_info)
+            logger.info(f"Current payment_info after update: {payment_info}")
             
             # Check what's still needed
             if "name" not in payment_info:
+                logger.warning("Validation failed: 'name' is missing from payment_info. Re-prompting for name.")
                 return {
                     "output": "Please provide your full name:",
                     "stage": "collecting_details"
                 }
             elif "email" not in payment_info:
+                logger.info("Validation passed for 'name'. 'email' is missing. Prompting for email.")
                 return {
                     "output": f"Thank you, *{payment_info['name']}*\n\nNow provide your email address:",
                     "stage": "collecting_details"
                 }
             else:
+                logger.info("All details collected. Proceeding to process_payment.")
                 # All details collected, process payment
                 return process_payment(session_id, payment_info, product_name, recommended_plan)
         
@@ -209,10 +223,11 @@ IMPORTANT: `confidence` must be a number between 0.0 and 1.0 (e.g., 0.95, 0.8, 0
             }
         
         else:
-            # Default response
+            # Default response, include the context switch flag
             return {
                 "output": result.response,
-                "stage": result.stage
+                "stage": result.stage,
+                "requires_context_switch": result.requires_context_switch
             }
             
     except Exception as e:

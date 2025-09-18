@@ -58,7 +58,7 @@ def handle_unknown_product_intelligently(user_message: str, chat_history: list, 
                 if collected_info:
                     logger.info(f"LLM routing to PAYMENT agent for session {session_id}")
                     set_stage(session_id, "payment")
-                    payment_response = run_payment_agent(user_message, chat_history)
+                    payment_response = run_payment_agent(user_message, chat_history, session_id)
                     if isinstance(payment_response, dict):
                         return payment_response.get("output", "I'll help you with the payment process! 💳")
                     else:
@@ -224,6 +224,24 @@ def orchestrate_chat(user_message: str, session_id: str) -> str:
                 logger.info(f"Processing payment stage message for session {session_id}")
                 response_data = run_payment_agent(user_message, chat_history, session_id)
                 
+                # Check if the payment agent has signaled a context switch
+                if response_data.get("requires_context_switch"):
+                    logger.warning(f"Payment agent signaled a context switch for session {session_id}. Resetting flow.")
+                    
+                    # 1. Clear all collected info for a completely fresh start.
+                    conversations_collection.update_one(
+                        {"session_id": session_id},
+                        {"$set": {"collected_info": {}}}
+                    )
+                    logger.info(f"Cleared all collected_info for session {session_id} on context switch.")
+                    
+                    # 2. Reset the stage.
+                    set_stage(session_id, "initial")
+                    
+                    # 3. Re-route the original message through the main orchestrator logic to handle the new intent.
+                    # We call orchestrate_chat again to restart the process cleanly.
+                    return orchestrate_chat(user_message, session_id)
+
                 if isinstance(response_data, dict):
                     agent_response = response_data.get("output", "I'm processing your payment information. Please provide your details.")
                 else:
@@ -391,67 +409,27 @@ Chat History:
             
             if should_continue:
                 logger.info(f"🔄 CONTINUING conversation for session {session_id}")
-                # Continue with current conversation context
+                # Get the real intent for the current message to route correctly.
+                intent_result = get_primary_intent(user_message, chat_history)
+                
+                # Prioritize the existing product context from the session.
                 current_session = get_session(session_id)
                 context = current_session.get("conversation_context", {})
                 current_product = context.get("primary_product")
-                
-                # *** LLM-POWERED PRODUCT DETECTION FOR CONTINUATION ***
-                # Use LLM to detect if user is specifying a product when current product is UNKNOWN
-                if current_product == "UNKNOWN":
-                    # Quick LLM check for product specification
-                    product_detection_prompt = [
-                        SystemMessage(content=f"""You are analyzing if the user is specifying an insurance product type.
 
-Available products:
-- TRAVEL: Travel insurance for trips, vacations, holidays
-- MAID: Maid/domestic helper insurance
-- UNKNOWN: Cannot determine or not specified
+                if current_product and current_product != Product.UNKNOWN:
+                    # If product context exists, override the classification to maintain context.
+                    logger.info(f"Maintaining product context: {current_product}. Using new intent: {intent_result.intent}")
+                    intent_result.product = current_product if isinstance(current_product, Product) else Product(current_product.upper())
+                else:
+                    # No existing product context, so we trust the new classification.
+                    logger.info(f"No prior product context. Using new classification: {intent_result.product}")
+                    update_conversation_context(session_id, primary_product=intent_result.product)
 
-Conversation context: The agent just offered help with Travel or Maid insurance.
-
-Analyze if the user's message indicates a specific product choice.
-
-Chat History:
-{chat_history[-3:] if len(chat_history) > 3 else chat_history}"""),
-                        HumanMessage(content=f"User message: {user_message}")
-                    ]
-                    
-                    try:
-                        product_intent = get_primary_intent(user_message, chat_history)
-                        if hasattr(product_intent, 'product') and product_intent.product != Product.UNKNOWN:
-                            current_product = product_intent.product
-                            update_conversation_context(session_id, primary_product=current_product, last_intent="product_inquiry")
-                            logger.info(f"LLM detected product: {current_product} for session {session_id}")
-                    except Exception as e:
-                        logger.warning(f"Product detection failed: {str(e)}")
-                
-                # Create a mock intent_result for existing flow compatibility
-                class MockIntentResult:
-                    def __init__(self, product, intent, confidence, requires_clarification=False):
-                        self.product = product
-                        self.intent = intent
-                        self.confidence = confidence
-                        self.requires_clarification = requires_clarification
-                
-                # Ensure product is Product enum
-                if isinstance(current_product, str):
-                    try:
-                        current_product = Product(current_product.upper())
-                    except ValueError:
-                        current_product = Product.UNKNOWN
-                
-                intent_result = MockIntentResult(
-                    product=current_product,
-                    intent="product_inquiry",  # Default to product inquiry for continuation
-                    confidence=flow_confidence,
-                    requires_clarification=False
-                )
-                
                 product = intent_result.product
                 intent = intent_result.intent
                 
-                logger.info(f"CONVERSATION CONTINUATION - Product: {product}, Reason: {flow_reason}")
+                logger.info(f"CONVERSATION CONTINUATION - Product: {product}, Intent: {intent}, Reason: {flow_reason}")
                 
             else:
                 logger.info(f"🆕 NEW CLASSIFICATION for session {session_id}")
