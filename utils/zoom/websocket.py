@@ -84,15 +84,18 @@ class WebSocketManager:
             "option": 192,
             "resource": resource
         }
-        logger.info(f"Sending login payload: {login_payload}")
+        logger.info(f"Sending login payload...")
         await self.send_json(login_payload)
 
+    # Need to make this handling more robust in case there is a failure in forwarding message
+    # after the push-ack is received from callback.
     async def _listen_for_messages(self):
         """Listens for incoming messages and passes them to the callback."""
         logger.info("Starting message listener...")
         try:
             async for message in self.websocket:
                 await self.on_message_callback(message)
+
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning(f"WebSocket connection closed: {e.code} {e.reason}")
         finally:
@@ -103,15 +106,15 @@ class WebSocketManager:
     async def _send_pings(self):
         """Sends a ping every 30 seconds to keep the connection alive."""
         logger.info("Starting ping task...")
+        logger.info(f"checking connection before ping... self.is_connected: {self.is_connected}")
         while self.is_connected:
             try:
+                timestamp = int(time.time() * 1000)
+                ping_message = f"ping {timestamp}"
+                
+                logger.info(f"Sending application ping: {ping_message}")
+                await self.websocket.send(ping_message)
                 await asyncio.sleep(60)
-                if self.is_connected and self.websocket:
-                    timestamp = int(time.time() * 1000)
-                    ping_message = f"ping {timestamp}"
-                    
-                    logger.info(f"Sending application ping: {ping_message}")
-                    await self.send_text(ping_message)
 
             except asyncio.CancelledError:
                 logger.info("Ping task cancelled.")
@@ -130,6 +133,7 @@ class WebSocketManager:
         
         try:
             await self.websocket.send(json.dumps(data))
+            logger.info(f"Sent message to ws: {data}")
         except websockets.exceptions.ConnectionClosed:
             logger.error("Failed to send message, connection closed.")
             self.is_connected = False

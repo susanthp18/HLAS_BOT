@@ -4,7 +4,8 @@ import logging
 from typing import Callable, Awaitable
 import httpx
 from pydantic import BaseModel, Field
-from websocket_manager import WebSocketManager
+from .websocket import WebSocketManager
+import os
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -31,7 +32,8 @@ class EngagementManager:
     def __init__(
         self,
         base_api_url: str,
-        flow_id: str,
+        nick_name: str,
+        email: str,
         on_agent_message_callback: Callable[[dict | str], Awaitable[None]],
     ):
         """
@@ -39,13 +41,11 @@ class EngagementManager:
 
         Args:
             base_api_url (str): The base URL for the Zoom Contact Center APIs.
-            flow_id (str): The specific flow ID for initiating the engagement.
             on_agent_message_callback (Callable): An async callback function to send
                                                    messages/events back to the primary orchestrator.
         """
         self.base_api_url = base_api_url
         self.zoom_api_key = os.environ.get("ZOOM_API_KEY")
-        self.flow_id = flow_id
         self.on_agent_message_callback = on_agent_message_callback
 
         self.http_client = httpx.AsyncClient()
@@ -54,58 +54,106 @@ class EngagementManager:
         # State for the engagement
         self.auth_token: str | None = None
         self.user_id: str | None = None
-        self.user_email: str | None = None
-        self.user_name: str | None = None
+        self.user_email: str = email
+        self.user_name: str = nick_name
         self.resource: str | None = None
         self.engagement_id: str | None = None
+        self.session_id: str | None = None
         self.chat_session_id: str | None = None
         self.zm_aid: str | None = None
         self.is_agent_connected = False
 
-    async def _handle_websocket_message(self, message: str):
+    async def _handle_websocket_message(self, message: dict | str):
         """Internal callback to process messages from the WebSocketManager."""
-        # Ignore application-level ping/pong messages
+
         if message.startswith("ping") or message.startswith("pong"):
             logger.info(f"Received heartbeat from server: {message}")
-            return
-
-        if "agents are busy" in message.lower():
-            logger.warning("All agents are busy. Notifying orchestrator.")
-            await self.on_agent_message_callback(
-                {"event": "no_agents_available", "details": message}
-            )
             return
 
         try:
             data = json.loads(message)
             logger.info(f"Received structured message from WebSocket: {data}")
 
-            event = data.get("event")
-            if (
-                event == "agent_connected"
-            ):  # Need to update according to the actual event name
-                logger.info("Agent has connected to the engagement.")
-                self.is_agent_connected = True
-                asyncio.create_task(self.send_connection_ack())
-                # Also forward this event to the main orchestrator
-                await self.on_agent_message_callback(data)
-            elif event == "agent_message" or event == "typing":
-                await self.on_agent_message_callback(data)
+        # try:
+            if data.get("type") == "push" and "id" in data:
+                ack_msg = {
+                    "id": data["id"],
+                    "type": "push-ack"
+                }
+                await self.ws_manager.send_json(ack_msg)
+                logger.info(f"Sent push-ack for id={data['id']}")
+
+            message_name = data.get("name")
+
+            # 1. Ignore typing indicators and participant info immediately
+            if message_name in ["/chat/typingIndicator", "cci/participant/info"]:
+                asyncio.create_task(self.user_ready_ack())
+                # asyncio.create_task(self.populate_chat_session_id())
+                logger.info(f"Ignoring event: {message_name}")
+                return
+
+            # 2. Process the main '/chat/message' events
+            if message_name == "/chat/message":
+                event_str = data.get("event")
+                if not event_str:
+                    logger.warning(
+                        "'/chat/message' received without 'event' field. No message to forward to whatsapp handler. Ignoring..."
+                    )
+                    return
+
+                # The 'event' field is a JSON string, so it needs to be decoded
+                event_data = json.loads(event_str)
+                event_name = event_data.get("eventName")
+                msg_type = event_data.get("type")
+                if(event_data.get("chatSessionId") and not self.chat_session_id):
+                    self.chat_session_id = event_data.get("chatSessionId")
+
+                # 1. Agent sends a message
+                if event_name == "send_msg" and msg_type == "1":
+                    try:
+                        # The 'text' field is another layer of JSON string
+                        text_payload_str = event_data.get("text", "{}")
+                        text_payload = json.loads(text_payload_str)
+                        # Extract the actual message from the nested structure
+                        text = text_payload.get("ops", [{}])[0].get("insert", "").strip()
+                        if text:
+                            await self.on_agent_message_callback(text)
+                    except (json.JSONDecodeError, IndexError, KeyError) as e:
+                        logger.error(f"Error parsing agent message text content: {e}")
+
+                # 2. Agent joins the chat
+                elif event_name == "send_msg" and msg_type == "2":
+                    logger.info("Agent has connected to the engagement.")
+                    self.is_agent_connected = True
+                    asyncio.create_task(self.user_ready_ack())
+                    asyncio.create_task(self.populate_chat_session_id())
+                    text = event_data.get("text")
+                    if text:
+                        await self.on_agent_message_callback(text)
+
+                # 3. Chat has ended
+                elif event_name == "chat_ended":
+                    await self.on_agent_message_callback("This chat has been closed.")
+
+                else:
+                    logger.debug(
+                        f"Received unhandled '/chat/message' with eventName: '{event_name}' and type: '{msg_type}'"
+                    )
             else:
-                logger.debug(f"Received unhandled event type: {event}")
-                await self.on_agent_message_callback(data)  # Forward unknown events too
+                # logger.debug(f"Received unhandled event type: {event}")
+                logger.debug(f"Received unhandled message name: {message_name}")
 
         except json.JSONDecodeError:
             logger.warning(
-                f"Received a non-JSON message that was not handled: {message}"
+                f"Received a non-JSON event string that was not handled: {message}"
             )
 
     async def get_auth_token(self) -> bool:
         """Calls the auth endpoint to retrieve a JWT token for the session."""
         url = f"{self.base_api_url}/v1/auth/token/generate/in/visitor/mode"
         payload = {
-            "customerId": null,
-            "customerName": self.user_name or "Guest User",
+            "customerId": None,
+            "customerName": self.user_name,
             "email": self.user_email,
             "apiKey": self.zoom_api_key,
         }
@@ -114,12 +162,26 @@ class EngagementManager:
             response = await self.http_client.post(url, json=payload)
             response.raise_for_status()
 
-            auth_data = AuthResponse(**response.json())
-            self.auth_token = auth_data.result.token
-            self.user_id = auth_data.result.customer.id
-            self.resource = auth_data.resource
-            self.zm_aid = auth_data.result.zmAid
-            logger.info("Successfully retrieved auth token.")
+            resp_json = response.json()
+            auth_data = {
+                "result": {
+                    "token": resp_json.get("result", {}).get("token"),
+                    "customer": {
+                        "id": resp_json.get("result", {}).get("customer", {}).get("id")
+                    },
+                    "zmAid": resp_json.get("result", {}).get("zmAid"),
+                    "zpnsJwtToken": resp_json.get("result", {}).get("zpnsJwtToken"),
+                }
+            }
+
+            self.auth_token = auth_data["result"]["token"]
+            self.user_id = auth_data["result"]["customer"]["id"]
+            self.resource = os.environ.get("ZOOM_SDK_RESOURCE")
+            self.zm_aid = auth_data["result"]["zmAid"]
+            self.zpns_jwt_token = auth_data["result"]["zpnsJwtToken"]
+
+            # Added only for the time being to test
+            logger.info(f"Successfully retrieved auth token: {self.auth_token}")
             return True
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             logger.error(f"Error getting auth token: {e}")
@@ -138,15 +200,15 @@ class EngagementManager:
         url = f"{self.base_api_url}/v1/livechat/customer/incoming"
         headers = {"Authorization": f"Bearer {self.auth_token}"}
         payload = {
-            entryPointType: "entryId",
-            entryPoint: self.zoom_api_key,
-            preChatSurveyCustomerInfo: {
-                nickName: self.user_name or "Guest User",
-                email: self.user_email,
+            "entryPointType": "entryId",
+            "entryPoint": self.zoom_api_key,
+            "preChatSurveyCustomerInfo": {
+                "nickName": self.user_name or "Guest User",
+                "email": self.user_email,
             },
-            featureOption: "7",
-            customerBrowserInfo: {
-                deviceDetailInDTO: {
+            "featureOption": "7",
+            "customerBrowserInfo": {
+                "deviceDetailInDTO": {
                     "deviceId": "",
                     "deviceName": "",
                     "deviceType": "",
@@ -161,23 +223,32 @@ class EngagementManager:
                 "engagementStartPage": "",
                 "engagementStartPageTitle": "",
             },
-            consumerWebsiteData: [],
+            "consumerWebsiteData": [],
         }
         try:
             logger.info("Initiating engagement...")
-            response = await self.http_client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
 
-            incoming_data = IncomingResponse(**response.json())
-            self.engagement_id = incoming_data.result.engagementId
-            logger.info(f"Engagement created with ID: {self.engagement_id}")
-
-            # Now, establish the WebSocket connection
+            # Establish the WebSocket connection
             self.ws_manager = WebSocketManager(
                 zm_aid=self.zm_aid, on_message_callback=self._handle_websocket_message
             )
-            await self.ws_manager.connect(self.auth_token, self.user_id, self.resource)
+            await self.ws_manager.connect(
+                self.zpns_jwt_token, self.user_id, self.resource
+            )
+
+            asyncio.create_task(self.user_ready_ack())
+            # Initiate the engagement to a Zoom agent via API upon successful WS connection
+            response = await self.http_client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+
+            incoming_data = response.json()
+            self.engagement_id = incoming_data.get("result", {}).get("engagementId")
+            self.session_id = incoming_data.get("result", {}).get("sessionId")
+            asyncio.create_task(self.populate_chat_session_id())
+            logger.info(f"Engagement created with ID: {self.engagement_id}")
+
             return True
+
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             logger.error(f"Error initiating engagement: {e}")
             return False
@@ -187,26 +258,79 @@ class EngagementManager:
             )
             return False
 
-    async def send_connection_ack(self):
-        """Sends the 'connected' acknowledgement after an agent joins."""
-        if not self.engagement_id or not self.auth_token:
-            logger.error(
-                "Cannot send connection ack: missing engagement_id or auth_token."
-            )
+    async def user_ready_ack(self):
+        """
+        Sends the 'connected' acknowledgement after the user successfully joins ws channel.
+        This enables the ws channel to receive the agent messages.
+        """
+        if not self.engagement_id or not self.auth_token or not self.session_id:
+            logger.error("Cannot send connection ack: missing request body parameters.")
             return
 
         url = f"{self.base_api_url}/v1/livechat/customer/connected"
         headers = {"Authorization": f"Bearer {self.auth_token}"}
-        payload = {"engagementId": self.engagement_id}
+        payload = {
+            "engagementId": self.engagement_id,
+            "sessionId": self.session_id,
+            "protocol": "ZPNS",
+        }
         try:
-            logger.info("Sending connection acknowledgement...")
+            logger.info(
+                "Sending user connection ack. Subscribing to agent messages in ws channel..."
+            )
             response = await self.http_client.post(url, headers=headers, json=payload)
             response.raise_for_status()
-            self.chat_session_id = response.json().get("result", {}).get("chatSessionId")
-            if not self.chat_session_id:
-                logger.error("No chatSessionId returned in connection ack response.")
-            return response.status
             logger.info("Connection acknowledgement sent successfully.")
+            return True
+
+        except (httpx.RequestError, httpx.HTTPStatusError) as e:
+            logger.error(f"Error sending connection acknowledgement: {e}")
+
+    async def populate_chat_session_id(self) -> None:
+        """
+        Fetches the engagement info and extracts the chat_session_id.\
+        This is needed to send a message to the chat.
+        """
+        if not self.engagement_id or not self.auth_token or not self.session_id:
+            logger.error("Cannot send connection ack: missing request body parameters.")
+            return
+
+        url = f"{self.base_api_url}/v1/engagement/content/sdk/history/timestamp/engagement"
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
+        params = {
+            "group": self.engagement_id,
+        }
+        try:
+            logger.info(
+                "Requesting engagement data to extract chatSessionId..."
+            )
+            response = await self.http_client.get(url, params=params,headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            result_string = data.get("result")
+
+            if not isinstance(result_string, str) or not result_string.strip():
+                logger.error(
+                    "'result' key is missing, not a string, or contains only whitespace."
+                )
+                return
+
+            # Safely attempt to decode the string
+            try:
+                nested_data = json.loads(result_string)
+            except json.JSONDecodeError:
+                logger.error(
+                    f"Failed to decode JSON from 'result' string. Content: '{result_string}'"
+                )
+                return
+
+            if not nested_data.get("chatSessionId"):
+                print("Error: 'chatSessionId' not found inside the 'result' data.")
+                return None
+
+            self.chat_session_id = nested_data.get("chatSessionId")
+            logger.info(f"Extracted chatSessionId: {self.chat_session_id}")
+            return None
 
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             logger.error(f"Error sending connection acknowledgement: {e}")
@@ -223,14 +347,27 @@ class EngagementManager:
             )
             return
 
-        url = f"{self.base_api_url}/v1/livechat/message/send"
+        url = "https://us01cci.zoom.us/v1/livechat/message/send"
         headers = {"Authorization": f"Bearer {self.auth_token}"}
-        payload = {"engagementId": self.engagement_id, "message": {"text": text}}
+        payload = {
+            "source": "WEB_CHAT",
+            "text": text,
+            "originalText": text,
+            "messageTempId": "temp_v5jBH8Ak6YxDveaq2CbQF",
+            "uniqueId": "temp_v5jBH8Ak6YxDveaq2CbQF",
+            "chatSessionId": self.chat_session_id,
+            "engagementId": self.engagement_id,
+            "messageSeqId": 1756207963727,
+            "messagingSeqInfo": {"instanceId": "dOyJ4cmn3lVg4U3iYpsJu", "seqId": 1},
+            "pushSelf": True,
+            "featureOption": "7",
+        }
         try:
             logger.info(f"Sending message to agent: '{text}'")
             response = await self.http_client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             logger.info("Message sent successfully.")
+
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             logger.error(f"Error sending message: {e}")
 
