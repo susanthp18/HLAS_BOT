@@ -223,6 +223,7 @@ GENERAL RULES:
   - Adult (age 70 years and below)
   - Adult (age above 70 years)
   - Child
+- **Strict Length Limit:** The entire response MUST be under 3500 characters to comply with API limits. Be concise.
 
 **YOUR TASK - A STRICT 3-STEP PROCESS:**
 
