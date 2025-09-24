@@ -9,16 +9,21 @@ error recovery, validation, and production-grade features.
 import os
 import re
 import logging
+import uuid
 from typing import Dict, Any, Optional, Tuple
+from functools import partial
 from datetime import datetime
 import asyncio
 from fastapi import Request, Response
 import requests
 from agents.intelligent_orchestrator import orchestrate_chat
 from agents.fallback_system import get_fallback_response
-from app.session_manager import cleanup_old_sessions
+from app.session_manager import get_stage, set_stage, cleanup_old_sessions
+from .zoom.engagement import EngagementManager
 
 logger = logging.getLogger(__name__)
+
+BASE_URL = os.getenv("ZOOM_BASE_URL", "https://us01cciapi.zoom.us")
 
 class WhatsAppMessageHandler:
     """
@@ -286,11 +291,47 @@ class WhatsAppMessageHandler:
             self._send_message(user_phone, rate_limit_msg)
             return
 
-        # Process message
-        response = self.handle_message(message, user_phone, metadata)
-        
-        # Send response
-        self._send_message(user_phone, response)
+        # Check if the stage is "live_agent" before an intent is set by the incoming message
+        stage = get_stage(f"whatsapp_{user_phone}")
+        if stage == "live_agent":
+            manager = EngagementManager.get_by_session(user_phone)
+            if not manager:
+                logger.error(f"Zoom Chat session for contact '{user_phone}' not found.")
+                self._send_message(user_phone, "Unfortunately the agent has disconnected. Please try again later.")
+
+            if not manager.is_agent_connected:
+                logger.error("Agent has not connected yet.")
+                self._send_message(user_phone, "You're in a queue. Please wait while we are trying to connect you to an agent.")
+            else:
+                await manager.send_message(message)
+
+        else:
+            # Process message
+            response = self.handle_message(message, user_phone, metadata)
+            
+            # Send response
+            self._send_message(user_phone, response)
+
+            #Check if the stage is "live_agent" after the intent is set by the incoming message
+            stage = get_stage(f"whatsapp_{user_phone}")
+            if stage == "live_agent":
+                if user_phone in EngagementManager._active_engagements:
+                    logger.error(f"Chat session '{session_id}' is already active.")
+
+                logger.info(f"Creating and storing new engagement for session: {user_phone}")
+                callback_with_session_context = partial(self.handle_agent_response, user_phone)
+                
+                temp_name = uuid.uuid4().hex[:6]
+                temp_email = f"{temp_name}@hlastest.com"
+
+                manager = EngagementManager.create_and_register(
+                    session_id=user_phone,
+                    nick_name=temp_name,
+                    email=temp_email,
+                    base_api_url=BASE_URL,
+                    on_agent_message_callback=callback_with_session_context
+                )
+                asyncio.create_task(manager.initiate_engagement())
 
     async def process_webhook(self, request: Request) -> Response:
         """
@@ -343,6 +384,31 @@ class WhatsAppMessageHandler:
                 "timestamp": datetime.now().isoformat(),
                 "error": str(e)
             }
+
+    # Handlers for Zoom Engagement setup
+    async def handle_agent_response(self, user_phone: str, message: dict | str):
+        """Callback triggered by EngagementManager for agent messages."""
+        logger.info(f"Callback for number '{user_phone}': Received message from agent: {message}")
+        # --- FORWARD MESSAGE TO CUSTOMER THROUGH WHATSAPP ---
+        self._send_message(user_phone, message)
+        if(message == "This chat has been closed."):
+            set_stage(f"whatsapp_{recipient_number}", "initial")
+            await close_engagement_and_cleanup(user_phone)
+        
+        event = message.get("event") if isinstance(message, dict) else None
+        if event == "consumer_disconnected":
+            logger.info(f"Agent ended chat session for numebr '{user_phone}'. Cleaning up.")
+            await close_engagement_and_cleanup(user_phone)
+
+
+    async def close_engagement_and_cleanup(self, session_id: str):
+        """Helper to gracefully close and remove an engagement from the session store."""
+        manager = EngagementManager.get_by_session(session_id)
+        if manager:
+            await manager.close()
+            manager.unregister(session_id)  # Remove from registry as well, if needed. del EngagementManager._active_engagements[session_id]
+            logger.info(f"Successfully closed and cleaned up session: {session_id}")
+
 
 # Global handler instance
 whatsapp_handler = WhatsAppMessageHandler()

@@ -98,6 +98,17 @@ class WebSocketManager:
 
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning(f"WebSocket connection closed: {e.code} {e.reason}")
+        
+        except websockets.exceptions.ConnectionClosedError as e:
+            logger.warning(f"WebSocket closed with error: {e.code} {e.reason}")
+
+        except asyncio.CancelledError:
+            logger.warning("Task was cancelled explicitly")
+            raise
+
+        except Exception as e:
+            logger.exception(f"Unexpected error in listener: {e}")
+            
         finally:
             logger.info("Message listener stopped.")
             self.is_connected = False

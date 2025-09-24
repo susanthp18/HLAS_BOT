@@ -1,7 +1,8 @@
+from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Callable, Awaitable
+from typing import Dict, Callable, Awaitable
 import httpx
 from pydantic import BaseModel, Field
 from .websocket import WebSocketManager
@@ -28,6 +29,8 @@ class EngagementManager:
     """
     Manages the entire lifecycle of a single customer support engagement.
     """
+
+    _active_engagements: Dict[str, EngagementManager] = {}
 
     def __init__(
         self,
@@ -62,6 +65,39 @@ class EngagementManager:
         self.chat_session_id: str | None = None
         self.zm_aid: str | None = None
         self.is_agent_connected = False
+
+    @classmethod
+    def create_and_register(
+        cls, 
+        session_id: str, 
+        nick_name: str, 
+        email: str, 
+        base_api_url: str, 
+        on_agent_message_callback: Callable
+    ) -> EngagementManager:
+        """A factory method to create, register, and return a new engagement manager."""
+        if session_id in cls._active_engagements:
+            return cls._active_engagements[session_id]
+            
+        new_manager = cls(
+            nick_name=nick_name,
+            email=email,
+            base_api_url=base_api_url,
+            on_agent_message_callback=on_agent_message_callback
+        )
+        cls._active_engagements[session_id] = new_manager
+        return new_manager
+
+    @classmethod
+    def get_by_session(cls, session_id: str) -> EngagementManager | None:
+        """Fetches an active engagement manager by its session ID."""
+        return cls._active_engagements.get(session_id)
+
+    @classmethod
+    def unregister(cls, session_id: str):
+        """Removes an engagement manager from the registry when it's done."""
+        if session_id in cls._active_engagements:
+            del cls._active_engagements[session_id]
 
     async def _handle_websocket_message(self, message: dict | str):
         """Internal callback to process messages from the WebSocketManager."""
@@ -125,11 +161,11 @@ class EngagementManager:
                 elif event_name == "send_msg" and msg_type == "2":
                     logger.info("Agent has connected to the engagement.")
                     self.is_agent_connected = True
-                    asyncio.create_task(self.user_ready_ack())
-                    asyncio.create_task(self.populate_chat_session_id())
+                    # asyncio.create_task(self.populate_chat_session_id())
                     text = event_data.get("text")
                     if text:
                         await self.on_agent_message_callback(text)
+                    asyncio.create_task(self.user_ready_ack())
 
                 # 3. Chat has ended
                 elif event_name == "chat_ended":
@@ -236,7 +272,6 @@ class EngagementManager:
                 self.zpns_jwt_token, self.user_id, self.resource
             )
 
-            asyncio.create_task(self.user_ready_ack())
             # Initiate the engagement to a Zoom agent via API upon successful WS connection
             response = await self.http_client.post(url, json=payload, headers=headers)
             response.raise_for_status()
@@ -244,7 +279,8 @@ class EngagementManager:
             incoming_data = response.json()
             self.engagement_id = incoming_data.get("result", {}).get("engagementId")
             self.session_id = incoming_data.get("result", {}).get("sessionId")
-            asyncio.create_task(self.populate_chat_session_id())
+            asyncio.create_task(self.user_ready_ack())
+            # asyncio.create_task(self.populate_chat_session_id())
             logger.info(f"Engagement created with ID: {self.engagement_id}")
 
             return True
@@ -291,8 +327,8 @@ class EngagementManager:
         Fetches the engagement info and extracts the chat_session_id.\
         This is needed to send a message to the chat.
         """
-        if not self.engagement_id or not self.auth_token or not self.session_id:
-            logger.error("Cannot send connection ack: missing request body parameters.")
+        if not self.engagement_id or not self.auth_token:
+            logger.error("Cannot request engagement data: missing request body parameters.")
             return
 
         url = f"{self.base_api_url}/v1/engagement/content/sdk/history/timestamp/engagement"

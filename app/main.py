@@ -123,14 +123,15 @@ async def start_chat_session(session_id: str, initiate_engagement: InitiateEngag
 
     logger.info(f"Creating and storing new engagement for session: {session_id}")
     callback_with_session_context = partial(handle_agent_response, session_id)
-    manager = EngagementManager(
+    manager = EngagementManager.create_and_register(
+        session_id=session_id,
         nick_name=initiate_engagement.nick_name,
         email=initiate_engagement.email,
         base_api_url=BASE_URL,
         on_agent_message_callback=callback_with_session_context
     )
     # Add the new manager to our session store
-    active_engagements[session_id] = manager
+    # active_engagements[session_id] = manager
     background_tasks.add_task(manager.initiate_engagement)
     return {"status": "success", "message": "Engagement initiation started.", "session_id": session_id}
 
